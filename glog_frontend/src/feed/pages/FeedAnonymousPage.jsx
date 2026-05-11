@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import FeedTabs from '../components/FeedTabs';
-import SortToggle from '../components/SortToggle';
+import FeedSortAndTheme from '../components/FeedSortAndTheme';
 import FeedList from '../components/FeedList';
 
 export default function FeedAnonymousPage() {
@@ -10,7 +10,7 @@ export default function FeedAnonymousPage() {
     <>
       <div className="feed-tabs">
         <FeedTabs />
-        <SortToggle value={sortOrder} onChange={setSortOrder} />
+        <FeedSortAndTheme sortValue={sortOrder} onSortChange={setSortOrder} />
       </div>
       <div className="feed-card feed-post-meta" style={{ marginBottom: '1rem', padding: '0.85rem' }}>
         익명 유저 게시글만 · 목 데이터 (연동 시 GET /feed?type=anonymous&cursor=)

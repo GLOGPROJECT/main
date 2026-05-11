@@ -1,4 +1,5 @@
 import FeedTabs from '../components/FeedTabs';
+import FeedSortAndTheme from '../components/FeedSortAndTheme';
 import HashtagSearchBar from '../components/HashtagSearchBar';
 
 export default function FeedTagHubPage() {
@@ -6,6 +7,7 @@ export default function FeedTagHubPage() {
     <>
       <div className="feed-tabs">
         <FeedTabs />
+        <FeedSortAndTheme showSort={false} />
       </div>
       <div className="feed-card" style={{ marginBottom: '1rem' }}>
         <HashtagSearchBar inputId="tag-hub-search" />

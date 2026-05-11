@@ -24,6 +24,10 @@ import React, { useRef, useState, useMemo, useEffect, Suspense } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useGLTF, Html, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
+import GlobalTopNav from "./components/GlobalTopNav";
+
+// Html 라벨을 body에 붙여 canvas 상위 overflow에 잘리지 않게 함
+const htmlLabelPortal = typeof document !== "undefined" ? { current: document.body } : { current: null };
 
 // ──────────────────────────────────────────────────────────────────
 // 1. 데모용 유저 데이터 (위도 / 경도 기반)
@@ -143,9 +147,14 @@ function UserMarker({ position, user, onClick }) {
         />
       </mesh>
 
-      {/* 호버 시 이름 라벨 */}
+      {/* 호버 시 이름 라벨 — body 포털 + 핀 아래쪽 배치로 상단 잘림 방지 */}
       {hovered && (
-        <Html center distanceFactor={8} style={{ pointerEvents: "none" }}>
+        <Html
+          center
+          distanceFactor={8}
+          portal={htmlLabelPortal}
+          style={{ pointerEvents: "none", zIndex: 10000 }}
+        >
           <div style={labelStyle}>{user.name}</div>
         </Html>
       )}
@@ -222,12 +231,26 @@ export default function EarthCommunity() {
 
   return (
     <div style={wrapperStyle}>
-      <div
-        style={canvasWrapStyle}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
+      <GlobalTopNav />
+      <p
+        style={{
+          margin: 0,
+          padding: "18px 60px 14px",
+          fontSize: 12,
+          opacity: 0.72,
+          color: "#fff",
+          flexShrink: 0,
+        }}
       >
-        <Canvas camera={{ position: [0, 0, 3], fov: 45 }}>
+        드래그해서 지구를 돌리고, 캐릭터를 클릭해보세요.
+      </p>
+      <div style={canvasHostStyle}>
+        <div
+          style={canvasWrapStyle}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+        >
+        <Canvas camera={{ position: [0, 0, 3.35], fov: 45 }}>
           <ambientLight intensity={0.6} />
           <directionalLight position={[5, 3, 5]} intensity={1.1} />
           <Suspense fallback={null}>
@@ -243,15 +266,8 @@ export default function EarthCommunity() {
               필요하면 enableRotate=false로 줌만 살리는 식으로 활용 가능. */}
           {/* <OrbitControls enableRotate={false} enablePan={false} /> */}
         </Canvas>
+        </div>
       </div>
-
-      {/* 헤더 */}
-      <header style={headerStyle}>
-        <h1 style={{ margin: 0, fontSize: 20 }}>🌍 Globe Community</h1>
-        <p style={{ margin: "4px 0 0", opacity: 0.7, fontSize: 13 }}>
-          드래그해서 지구를 돌리고, 캐릭터를 클릭해보세요.
-        </p>
-      </header>
 
       {/* 유저 상세 패널 */}
       <UserPanel user={selectedUser} onClose={() => setSelectedUser(null)} />
@@ -304,10 +320,19 @@ const wrapperStyle = {
   position: "relative",
   width: "100%",
   height: "100vh",
+  display: "flex",
+  flexDirection: "column",
   background: "radial-gradient(circle at 50% 50%, #0b1026 0%, #04060f 100%)",
   color: "white",
   fontFamily: "Inter, system-ui, sans-serif",
   overflow: "hidden",
+};
+
+const canvasHostStyle = {
+  position: "relative",
+  flex: 1,
+  minHeight: 0,
+  width: "100%",
 };
 
 const canvasWrapStyle = {
@@ -317,17 +342,9 @@ const canvasWrapStyle = {
   touchAction: "none",
 };
 
-const headerStyle = {
-  position: "absolute",
-  top: 24,
-  left: 24,
-  zIndex: 2,
-  pointerEvents: "none",
-};
-
 const panelStyle = {
   position: "absolute",
-  top: 24,
+  top: 100,
   right: 24,
   bottom: 24,
   width: 320,
@@ -356,11 +373,11 @@ const closeBtnStyle = {
 };
 
 const labelStyle = {
-  background: "rgba(0,0,0,0.7)",
+  background: "rgba(0,0,0,0.78)",
   color: "white",
-  padding: "4px 10px",
+  padding: "6px 12px",
   borderRadius: 999,
   fontSize: 12,
   whiteSpace: "nowrap",
-  transform: "translateY(-24px)",
+  transform: "translateY(14px)",
 };

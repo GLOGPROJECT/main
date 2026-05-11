@@ -52,13 +52,12 @@ export default function App() {
                 }
               />
 
-              {/* 지구본 커뮤니티 (팀원 업데이트 반영: 현재 로그인 없이 테스트 모드) */}
               <Route
                 path="/globe"
                 element={
-                  // <ProtectedRoute> 
+                  <ProtectedRoute>
                     <EarthCommunity />
-                  // </ProtectedRoute>
+                  </ProtectedRoute>
                 }
               />
             </Routes>

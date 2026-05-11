@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import FeedTabs from '../components/FeedTabs';
-import SortToggle from '../components/SortToggle';
+import FeedSortAndTheme from '../components/FeedSortAndTheme';
 import FeedList from '../components/FeedList';
 import HashtagSearchBar from '../components/HashtagSearchBar';
 import { getMockTagPostCountDisplay } from '../mocks/feedMock';
@@ -98,7 +98,7 @@ export default function FeedTagPage() {
 
       <div className="feed-tabs">
         <FeedTabs />
-        <SortToggle value={sortOrder} onChange={setSortOrder} />
+        <FeedSortAndTheme sortValue={sortOrder} onSortChange={setSortOrder} />
       </div>
 
       <div className="feed-tag-search-sticky">

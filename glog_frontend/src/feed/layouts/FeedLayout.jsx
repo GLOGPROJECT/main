@@ -1,16 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, Outlet, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, Outlet, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../auth/hooks/useAuth';
-import { useFeedTheme } from '../theme/ThemeContext';
 import ComposeModal from '../components/ComposeModal';
 import GuestModal from '../components/GuestModal';
 import FeedNavEffects from './FeedNavEffects';
+import GlobalTopNav from '../../components/GlobalTopNav';
 import { LoginModalProvider, useLoginModal } from '../auth/LoginModalContext';
 
 function FeedLayoutInner() {
-  const { user, logout } = useAuth();
-  const navigate = useNavigate();
-  const { theme, toggleTheme } = useFeedTheme();
+  const { user } = useAuth();
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeEditPost, setComposeEditPost] = useState(null);
   const [composeInitialAction, setComposeInitialAction] = useState(null);
@@ -53,11 +51,6 @@ function FeedLayoutInner() {
     }
   }, [closeModal, searchParams, setSearchParams]);
 
-  const handleLogout = useCallback(async () => {
-    await logout();
-    navigate('/feed', { replace: true });
-  }, [logout, navigate]);
-
   const outletCtx = useMemo(() => ({ setComposeOpen: openComposeNew }), [openComposeNew]);
 
   const chartHeights = [40, 55, 35, 70, 45, 60, 50];
@@ -65,33 +58,7 @@ function FeedLayoutInner() {
   return (
     <div className="feed-app">
       <FeedNavEffects />
-      <header className="feed-header">
-        <Link to="/feed" className="feed-logo">
-          GLog 🌍
-        </Link>
-        <nav className="feed-nav" aria-label="주 메뉴">
-          <Link to="/globe">프로필</Link>
-          <Link to="/feed" className="feed-nav-active">
-            피드
-          </Link>
-          <a href="#shop">상점</a>
-          {isLoggedIn ? (
-            <button type="button" className="feed-nav-link-btn" onClick={handleLogout}>
-              로그아웃
-            </button>
-          ) : (
-            <Link to="/">로그인</Link>
-          )}
-        </nav>
-        <div className="feed-header-actions">
-          <button type="button" className="feed-btn-ghost" onClick={openModal} title="비로그인 모달 시연">
-            게스트 모달
-          </button>
-          <button type="button" className="feed-btn-ghost" onClick={toggleTheme} title="라이트/다크">
-            {theme === 'dark' ? '밝게' : '야간'}
-          </button>
-        </div>
-      </header>
+      <GlobalTopNav />
 
       <div className="feed-layout-grid">
         <aside className="feed-sidebar-left" aria-label="내 정보">
@@ -126,6 +93,9 @@ function FeedLayoutInner() {
           </div>
           <button type="button" className="feed-btn-primary" style={{ width: '100%' }} onClick={openComposeNew}>
             + 새 게시글
+          </button>
+          <button type="button" className="feed-btn-outline" style={{ width: '100%' }} onClick={openModal} title="비로그인 모달 시연">
+            게스트 모달
           </button>
         </aside>
 
