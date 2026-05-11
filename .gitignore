@@ -24,3 +24,9 @@ Thumbs.db
 
 # Prisma
 prisma/migrations/
+
+# DBINFO
+DBINFO
+
+#glog sql
+glog_schema.sql
