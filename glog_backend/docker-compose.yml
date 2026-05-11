@@ -1,0 +1,13 @@
+# 로컬 개발용 MySQL (.env.example 과 동일: root / password / devglobe)
+# 사용: cd glog_backend && docker compose up -d
+# 이미 PC에 MySQL이 3306을 쓰면 아래 ports 를 "3307:3306" 등으로 바꾸고 DATABASE_URL 포트도 맞출 것
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: devglobe
+    ports:
+      - "3306:3306"
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
