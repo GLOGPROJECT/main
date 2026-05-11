@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 router.use('/auth', require('../auth/routes'));
+router.use('/stats', require('../stats/routes'));
 
 // 이후 라우터 추가:
 // router.use('/users', require('./users'));
