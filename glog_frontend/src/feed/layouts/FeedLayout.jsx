@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, Outlet, useSearchParams } from 'react-router-dom';
+import { Link, Outlet, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../auth/hooks/useAuth';
+import { useFeedTheme } from '../theme/ThemeContext';
 import ComposeModal from '../components/ComposeModal';
 import GuestModal from '../components/GuestModal';
 import FeedNavEffects from './FeedNavEffects';
@@ -8,7 +9,9 @@ import GlobalTopNav from '../../components/GlobalTopNav';
 import { LoginModalProvider, useLoginModal } from '../auth/LoginModalContext';
 
 function FeedLayoutInner() {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+  const { theme, toggleTheme } = useFeedTheme();
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeEditPost, setComposeEditPost] = useState(null);
   const [composeInitialAction, setComposeInitialAction] = useState(null);
@@ -50,6 +53,11 @@ function FeedLayoutInner() {
       setSearchParams(next, { replace: true });
     }
   }, [closeModal, searchParams, setSearchParams]);
+
+  const handleLogout = useCallback(async () => {
+    await logout();
+    navigate('/feed', { replace: true });
+  }, [logout, navigate]);
 
   const outletCtx = useMemo(() => ({ setComposeOpen: openComposeNew }), [openComposeNew]);
 
