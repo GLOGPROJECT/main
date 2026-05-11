@@ -15,9 +15,7 @@ import FeedTagRedirect from './feed/pages/FeedTagRedirect';
 import FeedPostDetailPage from './feed/pages/FeedPostDetailPage';
 import FeedAnonymousPage from './feed/pages/FeedAnonymousPage';
 import { feedQueryClient } from './feed/queryClient';
-
-// 나중에 추가할 페이지들
-const GlobePage = () => <div>지구본 메인 페이지 (추후 구현)</div>;
+import EarthCommunity from './EarthCommunity';
 
 export default function App() {
   return (
@@ -30,10 +28,11 @@ export default function App() {
               <Route path="/" element={<Landing />} />
               <Route path="/auth/callback" element={<OAuthCallback />} />
 
+              {/* 피드 관련 라우트 */}
               <Route path="/tag/:slug" element={<FeedLayout />}>
                 <Route index element={<FeedTagPage />} />
               </Route>
-
+              
               <Route path="/feed" element={<FeedLayout />}>
                 <Route index element={<FeedHomePage />} />
                 <Route path="follow" element={<FeedFollowPage />} />
@@ -53,13 +52,13 @@ export default function App() {
                 }
               />
 
-              {/* 로그인 + 초기설정 완료 필요 */}
+              {/* 지구본 커뮤니티 (팀원 업데이트 반영: 현재 로그인 없이 테스트 모드) */}
               <Route
                 path="/globe"
                 element={
-                  <ProtectedRoute>
-                    <GlobePage />
-                  </ProtectedRoute>
+                  // <ProtectedRoute> 
+                    <EarthCommunity />
+                  // </ProtectedRoute>
                 }
               />
             </Routes>
