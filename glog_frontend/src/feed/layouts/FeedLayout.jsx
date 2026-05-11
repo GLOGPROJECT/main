@@ -95,7 +95,7 @@ function FeedLayoutInner() {
             + 새 게시글
           </button>
           <button type="button" className="feed-btn-outline" style={{ width: '100%' }} onClick={openModal} title="비로그인 모달 시연">
-            게스트 모달
+            게스트 
           </button>
         </aside>
 
