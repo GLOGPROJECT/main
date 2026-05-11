@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import FeedTabs from '../components/FeedTabs';
-import SortToggle from '../components/SortToggle';
+import FeedSortAndTheme from '../components/FeedSortAndTheme';
 import FeedList from '../components/FeedList';
 
 export default function FeedFollowPage() {
@@ -10,7 +10,7 @@ export default function FeedFollowPage() {
     <>
       <div className="feed-tabs">
         <FeedTabs />
-        <SortToggle value={sortOrder} onChange={setSortOrder} />
+        <FeedSortAndTheme sortValue={sortOrder} onSortChange={setSortOrder} />
       </div>
       <FeedList feedType="following" sortOrder={sortOrder} />
     </>

@@ -13,10 +13,10 @@ export default function SortToggle({ value, onChange }) {
   return (
     <div className="feed-sort">
       <button type="button" className={sort === 'latest' ? 'feed-sort-active' : ''} onClick={() => setSort('latest')}>
-        최신순
+        최신
       </button>
       <button type="button" className={sort === 'popular' ? 'feed-sort-active' : ''} onClick={() => setSort('popular')}>
-        인기글
+        인기
       </button>
     </div>
   );
