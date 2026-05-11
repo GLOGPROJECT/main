@@ -5,6 +5,7 @@ import Landing from './auth/pages/Landing';
 import OAuthCallback from './auth/pages/OAuthCallback';
 import InitialSetup from './auth/pages/InitialSetup';
 import EarthCommunity from './EarthCommunity';
+import ProfilePage from './profile/ProfilePage';
 
 export default function App() {
   return (
@@ -30,9 +31,19 @@ export default function App() {
             path="/globe"
             element={
               //일단 로그인없이 지구본 테스트
-            //  <ProtectedRoute> 
+            //  <ProtectedRoute>
                 <EarthCommunity />
              // </ProtectedRoute>
+            }
+          />
+
+          {/* 유저 프로필 페이지 - /profile/me (본인) 또는 /profile/:userId (타인) */}
+          <Route
+            path="/profile/:userId"
+            element={
+              <ProtectedRoute>
+                <ProfilePage />
+              </ProtectedRoute>
             }
           />
         </Routes>

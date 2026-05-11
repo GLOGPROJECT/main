@@ -61,7 +61,8 @@ const globalStyles = `
 
 export default function Landing() {
   // useAuth 훅에서 현재 로그인된 유저 정보와 로딩 상태를 가져옴
-  const { user, loading } = useAuth();
+  // user는 로그인된 유저 정보, 프로필 이동 시 user_id 사용
+  const { user: me, loading } = useAuth();
   const navigate = useNavigate();
 
   // 현재 선택된 메뉴 아이템 - 클릭 시 시각적 효과만, 실제 이동 없음
@@ -91,10 +92,10 @@ export default function Landing() {
 
   // 이미 로그인된 사용자는 메인 또는 초기 설정 페이지로 자동 이동
   useEffect(() => {
-    if (!loading && user) {
-      navigate(user.is_setup_complete ? '/globe' : '/initial-setup', { replace: true });
+    if (!loading && me) {
+      navigate(me.is_setup_complete ? '/globe' : '/initial-setup', { replace: true });
     }
-  }, [user, loading, navigate]);
+  }, [me, loading, navigate]);
 
   // GitHub OAuth 실패 시 URL에 ?error=... 파라미터 처리 후 URL 정리
   useEffect(() => {
@@ -120,6 +121,7 @@ export default function Landing() {
 
   // 로딩 중에는 배경색만 채운 빈 화면 (깜빡임 방지)
   if (loading) return <div style={{ background: '#0f1c36', height: '100vh' }} />;
+
 
   // 상단 네비게이션 메뉴 목록 - 로그인 전이라 클릭해도 이동 없음
   const navItems = ['프로필', '피드', '트로피', '상점', '로그아웃'];
@@ -182,7 +184,15 @@ export default function Landing() {
               <button
                 key={item}
                 className={`nav-item${activeNav === item ? ' active' : ''}`}
-                onClick={() => setActiveNav(item)}
+                onClick={() => {
+                  // 로그인 상태에서 프로필 클릭 시 본인 프로필 페이지로 이동
+                  if (item === '프로필' && me) {
+                    navigate(`/profile/${me.user_id}`);
+                  } else {
+                    // 로그인 전이거나 다른 메뉴는 시각적 선택 효과만
+                    setActiveNav(item);
+                  }
+                }}
               >
                 {item}
               </button>
