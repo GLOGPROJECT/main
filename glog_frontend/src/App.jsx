@@ -4,9 +4,7 @@ import { ProtectedRoute, AuthRoute } from './auth/components/ProtectedRoute';
 import Landing from './auth/pages/Landing';
 import OAuthCallback from './auth/pages/OAuthCallback';
 import InitialSetup from './auth/pages/InitialSetup';
-
-// 나중에 추가할 페이지들
-const GlobePage = () => <div>지구본 메인 페이지 (추후 구현)</div>;
+import EarthCommunity from './EarthCommunity';
 
 export default function App() {
   return (
@@ -31,9 +29,10 @@ export default function App() {
           <Route
             path="/globe"
             element={
-              <ProtectedRoute>
-                <GlobePage />
-              </ProtectedRoute>
+              //일단 로그인없이 지구본 테스트
+            //  <ProtectedRoute> 
+                <EarthCommunity />
+             // </ProtectedRoute>
             }
           />
         </Routes>
