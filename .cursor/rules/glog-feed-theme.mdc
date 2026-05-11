@@ -1,0 +1,6 @@
+---
+description: GLog 피드 UI — 라이트/다크 테마
+globs: glog_frontend/src/feed/**/*
+---
+
+GLog 피드(`glog_frontend/src/feed`)는 **밝은 모드와 야간(다크) 모드**를 모두 지원해야 한다. `ThemeProvider` + `data-theme` + `localStorage`(`glog-feed-theme`) 패턴을 유지하고, 새 컴포넌트는 CSS 변수(`--feed-*`)만 사용한다.
