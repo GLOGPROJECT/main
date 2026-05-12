@@ -5,9 +5,10 @@ router.use('/auth', require('../auth/routes'));
 router.use('/stats', require('../stats/routes'));
 router.use('/users', require('../users/routes'));
 
-// 이후 라우터 추가:
-// router.use('/users', require('./users'));
-// router.use('/posts', require('./posts'));
-// router.use('/feed', require('./feed'));
+router.use('/feed', require('../feed/routes/feedRoutes'));
+router.use('/tag', require('../feed/routes/tagRoutes'));
+router.use('/comments', require('../feed/routes/commentRoutes'));
+router.use('/hashtags', require('../feed/routes/hashtagRoutes'));
+router.use('/search', require('../feed/routes/searchRoutes'));
 
 module.exports = router;

@@ -273,6 +273,8 @@ model Post {
   user_id       Int?
   content       String   @db.VarChar(5000)
   type          PostType @default(public)
+  /// 익명 글 아바타(0~9). 일반/비밀 글은 null
+  anonymous_avatar_index Int?
   is_deleted    Boolean  @default(false)
   is_edited     Boolean  @default(false)
   like_count    Int      @default(0)
@@ -337,6 +339,7 @@ model Hashtag {
   post_hashtags  PostHashtag[]
   hashtag_subs   UserHashtagSub[]
 
+  @@index([use_count])
   @@map("hashtags")
 }
 

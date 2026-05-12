@@ -4,10 +4,28 @@ import { useInView } from 'react-intersection-observer';
 import api from '../../api/axios';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { useLoginModal } from '../auth/LoginModalContext';
-import { getCommentThreadPostId, mutateCommentListForPost } from '../mocks/feedMock';
-import { fetchMockPostCommentsPage } from '../mocks/mockPostComments';
 
 const MAX_COMMENT_LEN = 1000;
+const PAGE = 20;
+
+function formatCommentTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function mapApiToUi(c) {
+  const u = c.user;
+  return {
+    id: String(c.id),
+    author: u?.nickname || '알 수 없음',
+    avatarUrl: u?.avatar_url || undefined,
+    body: c.content,
+    is_deleted: Boolean(c.is_deleted),
+    createdAt: formatCommentTime(c.created_at),
+  };
+}
 
 export default function CommentSection({ postId, onCommentCountChange }) {
   const { user } = useAuth();
@@ -15,16 +33,23 @@ export default function CommentSection({ postId, onCommentCountChange }) {
   const qc = useQueryClient();
   const [draft, setDraft] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const currentHandle = user?.username || user?.handle || user?.name || 'me';
+  const [submitError, setSubmitError] = useState('');
+  const currentHandle = user?.nickname || user?.username || user?.handle || user?.name || '';
 
-  const threadId = useMemo(() => getCommentThreadPostId(postId), [postId]);
-  const queryKey = useMemo(() => ['comments', threadId], [threadId]);
+  const pid = String(postId);
+  const queryKey = useMemo(() => ['comments', pid], [pid]);
 
   const { data, status, error, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
     queryKey,
-    queryFn: ({ pageParam }) => fetchMockPostCommentsPage({ postId, cursor: pageParam ?? null, limit: 10 }),
+    queryFn: async ({ pageParam }) => {
+      const params = { limit: PAGE };
+      if (pageParam != null) params.last_comment_id = pageParam;
+      const { data: res } = await api.get(`/feed/${pid}/comments`, { params });
+      const items = (res.comments || []).map(mapApiToUi);
+      return { items, nextCursor: res.nextCursor ?? null };
+    },
     initialPageParam: null,
-    getNextPageParam: (last) => last.nextCursor ?? undefined,
+    getNextPageParam: (last) => (last?.nextCursor != null ? last.nextCursor : undefined),
   });
 
   const { ref: sentinelRef, inView } = useInView({ rootMargin: '120px', threshold: 0 });
@@ -36,50 +61,39 @@ export default function CommentSection({ postId, onCommentCountChange }) {
 
   const flat = useMemo(() => (data?.pages ? data.pages.flatMap((p) => p.items) : []), [data]);
 
-  const persistAndRefresh = useCallback(() => {
-    qc.invalidateQueries({ queryKey });
-  }, [qc, queryKey]);
+  const persistAndRefresh = useCallback(() => qc.invalidateQueries({ queryKey }), [qc, queryKey]);
 
   const submitComment = useCallback(async () => {
     if (!user && requestLogin()) return;
     const text = draft.trim();
     if (!text || text.length > MAX_COMMENT_LEN || submitting) return;
     setSubmitting(true);
-    const optimistic = {
-      id: `local-c-${Date.now()}`,
-      author: currentHandle,
-      body: text,
-      is_deleted: false,
-      createdAt: '방금',
-    };
-    mutateCommentListForPost(postId, (list) => [optimistic, ...list]);
-    setDraft('');
-    persistAndRefresh();
-    onCommentCountChange?.(1);
     try {
-      await api.post(`/feed/${threadId}/comments`, { body: text });
-    } catch {
-      /* 목: 이미 로컬 반영됨 — 연동 시 POST /feed/:postId/comments */
+      setSubmitError('');
+      await api.post(`/feed/${pid}/comments`, { content: text });
+      setDraft('');
+      await persistAndRefresh();
+      onCommentCountChange?.(1);
+    } catch (err) {
+      const msg = err?.response?.data?.error || err?.response?.data?.message || err?.message || '등록에 실패했습니다.';
+      setSubmitError(String(msg));
     } finally {
       setSubmitting(false);
     }
-  }, [currentHandle, draft, onCommentCountChange, persistAndRefresh, postId, requestLogin, submitting, threadId, user]);
+  }, [draft, onCommentCountChange, persistAndRefresh, pid, requestLogin, submitting, user]);
 
   const softDelete = useCallback(
     async (comment) => {
-      if (comment.is_deleted || comment.author !== currentHandle) return;
-      mutateCommentListForPost(postId, (list) =>
-        list.map((c) => (c.id === comment.id ? { ...c, is_deleted: true, body: c.body } : c))
-      );
-      persistAndRefresh();
-      onCommentCountChange?.(-1);
+      if (comment.is_deleted || !currentHandle || comment.author !== currentHandle) return;
       try {
         await api.delete(`/comments/${comment.id}`);
+        persistAndRefresh();
+        onCommentCountChange?.(-1);
       } catch {
-        /* 목: DELETE /comments/:commentId */
+        /* ignore */
       }
     },
-    [currentHandle, postId, persistAndRefresh, onCommentCountChange]
+    [currentHandle, persistAndRefresh, onCommentCountChange]
   );
 
   const onKeyDown = (e) => {
@@ -98,7 +112,13 @@ export default function CommentSection({ postId, onCommentCountChange }) {
       <div className="feed-comment-compose-sticky">
         <div className="feed-card feed-comment-compose-card">
           <div className="feed-comment-compose-row">
-            <div className="feed-avatar feed-avatar-sm" aria-hidden />
+            {user?.avatar_url ? (
+              <div className="feed-avatar feed-avatar-sm feed-avatar-img" aria-hidden>
+                <img src={user.avatar_url} alt="" width={36} height={36} decoding="async" />
+              </div>
+            ) : (
+              <div className="feed-avatar feed-avatar-sm" aria-hidden />
+            )}
             <div className="feed-comment-compose-field-wrap">
               <textarea
                 className="feed-comment-textarea feed-comment-textarea-inline"
@@ -123,26 +143,30 @@ export default function CommentSection({ postId, onCommentCountChange }) {
           <div className="feed-comment-compose-counter feed-post-meta">
             {draft.length} / {MAX_COMMENT_LEN}
           </div>
-          <p className="feed-api-hint" style={{ marginTop: 6 }}>
-            POST /feed/:postId/comments · 목: sessionStorage + 낙관적 반영
-          </p>
+          {submitError ? <p className="feed-compose-error" style={{ marginTop: '0.35rem' }}>{submitError}</p> : null}
         </div>
       </div>
 
       {status === 'pending' ? (
         <p className="feed-post-meta">댓글 불러오는 중…</p>
       ) : status === 'error' ? (
-        <p className="feed-compose-error">댓글 목 실패: {error?.message}</p>
+        <p className="feed-compose-error">댓글 목록 실패: {error?.response?.data?.error || error?.message}</p>
       ) : (
         <ul className="feed-comment-list" style={{ listStyle: 'none', margin: '0.75rem 0 0', padding: 0 }}>
           {flat.map((c) => (
             <li key={c.id} className="feed-comment feed-comment-row">
               {c.is_deleted ? (
-                <p className="feed-comment-deleted">삭제된 댓글입니다 (is_deleted=true)</p>
+                <p className="feed-comment-deleted">삭제된 댓글입니다</p>
               ) : (
                 <>
                   <div className="feed-comment-row-head">
-                    <div className="feed-avatar feed-avatar-sm" aria-hidden />
+                    {c.avatarUrl ? (
+                      <div className="feed-avatar feed-avatar-sm feed-avatar-img" aria-hidden>
+                        <img src={c.avatarUrl} alt="" width={36} height={36} decoding="async" />
+                      </div>
+                    ) : (
+                      <div className="feed-avatar feed-avatar-sm" aria-hidden />
+                    )}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <strong>{c.author}</strong>
                       {c.createdAt ? (
@@ -151,7 +175,7 @@ export default function CommentSection({ postId, onCommentCountChange }) {
                         </span>
                       ) : null}
                     </div>
-                    {c.author === currentHandle ? (
+                    {currentHandle && c.author === currentHandle ? (
                       <button type="button" className="feed-btn-outline" style={{ padding: '0.2rem 0.45rem', fontSize: '0.72rem' }} onClick={() => softDelete(c)}>
                         삭제
                       </button>

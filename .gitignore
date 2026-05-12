@@ -30,3 +30,6 @@ DBINFO
 
 #glog sql
 glog_schema.sql
+
+# 로컬 업로드 (multer → glog_backend/uploads)
+glog_backend/uploads/
