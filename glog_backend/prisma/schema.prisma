@@ -151,10 +151,12 @@ model UserStatus {
 }
 
 model CodingStreak {
-  user_id          Int       @id
-  current_streak   Int       @default(0)
-  max_streak       Int       @default(0)
-  last_commit_date DateTime?
+  user_id            Int       @id
+  current_streak     Int       @default(0)
+  max_streak         Int       @default(0)
+  last_commit_date   DateTime?
+  today_commit_count Int       @default(0) // 오늘 하루 커밋 횟수 (매일 자정 초기화)
+  last_reset_date    DateTime? // 마지막으로 today_commit_count가 초기화된 날짜
 
   user User @relation(fields: [user_id], references: [user_id])
 

@@ -10,16 +10,16 @@
  *  3) 캐릭터(마커) 클릭 시 자전이 멈추고, 카메라가 해당 캐릭터를
  *     정면으로 보도록 부드럽게 이동 + 패널이 슬라이드 인.
  *  4) 패널의 닫기 버튼을 누르면 다시 자동 회전 모드로 복귀.
- * 줌 인/아웃 동작 방식:
-  - 휠 위로: 지구 확대 (최대 2배)
-  - 휠 아래로: 지구 축소 (최소 절반)
+ *  줌 인/아웃 동작 방식:
+ *   - 휠 위로: 지구 확대 (최대 2배)
+ *   - 휠 아래로: 지구 축소 (최소 절반)
  *
  * 필요 패키지:
  *   npm i three @react-three/fiber @react-three/drei
  *
  * 에셋:
  *   /public/models/earth/scene.gltf  (+ scene.bin)
- *   
+ *
  * ------------------------------------------------------------------
  */
 
@@ -28,6 +28,10 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useGLTF, Html, OrbitControls, useAnimations } from "@react-three/drei";
 import { SkeletonUtils } from "three-stdlib";
 import * as THREE from "three";
+import GlobalTopNav from "./components/GlobalTopNav";
+
+// Html 라벨을 body에 붙여 canvas 상위 overflow에 잘리지 않게 함
+const htmlLabelPortal = typeof document !== "undefined" ? { current: document.body } : { current: null };
 
 // ──────────────────────────────────────────────────────────────────
 // 1. 데모용 유저 데이터 (위도 / 경도 기반)
@@ -56,7 +60,7 @@ function latLonToVec3(lat, lon, r = 1) {
 // 2. GLTF 지구 모델 + 유저 마커들
 //    (자전과 마커가 같이 돌도록 한 group 안에 묶음)
 // ──────────────────────────────────────────────────────────────────
-function EarthScene({ autoRotate, onSelectUser, dragRef, groupRef, zoomRef }) {
+function EarthScene({ autoRotate, onSelectUser, dragRef, groupRef }) {
   const group = groupRef;
   const { scene } = useGLTF("/models/earth/scene.gltf");
 
@@ -75,11 +79,15 @@ function EarthScene({ autoRotate, onSelectUser, dragRef, groupRef, zoomRef }) {
       dragRef.current.deltaX = 0;
       dragRef.current.deltaY = 0;
     } else {
-      // 손을 놓으면 X축은 부드럽게 0으로 복귀
-      group.current.rotation.x *= 0.9;
-      if (autoRotate) {
-        group.current.rotation.y += delta * 0.15;
+      const resumed = Date.now() > dragRef.current.pausedUntil;
+      if (resumed) {
+        // 3초 경과 후: X축 부드럽게 0으로 복귀 + Y축 자동 회전 재개
+        group.current.rotation.x *= 0.9;
+        if (autoRotate) {
+          group.current.rotation.y += delta * 0.15;
+        }
       }
+      // 대기 중엔 X/Y 모두 드래그 위치 그대로 고정
     }
   });
 
@@ -97,7 +105,6 @@ function EarthScene({ autoRotate, onSelectUser, dragRef, groupRef, zoomRef }) {
             position={pos}
             user={u}
             onClick={() => onSelectUser(u)}
-            zoomRef={zoomRef}
           />
         );
       })}
@@ -110,7 +117,7 @@ useGLTF.preload("/models/earth/scene.gltf");
 USERS.forEach((u) => useGLTF.preload(u.avatar));
 
 // ──────────────────────────────────────────────────────────────────
-// 3. 유저 마커 - GLB 아바타 + idle 애니메이션(index 1)
+// 3. 유저 마커 - GLB 아바타 + idle 애니메이션 + 카메라 거리 기반 스케일
 // ──────────────────────────────────────────────────────────────────
 
 // SkeletonUtils.clone: SkinnedMesh 스켈레톤까지 올바르게 복제
@@ -130,35 +137,40 @@ function AvatarModel({ url }) {
   return <primitive ref={rootRef} object={cloned} />;
 }
 
-function UserMarker({ position, user, onClick, zoomRef }) {
-  // scaleRef: 호버 스케일 lerp 전용 (position/quaternion 그룹과 분리)
+// 카메라 거리 기반 동적 스케일 상수
+const BASE_DISTANCE = 3.35;  // 기본 카메라 거리 (초기값과 동일)
+const MIN_SCALE = 0.3;       // 줌아웃 최소 (기본에서 14% 이상 멀어지면 도달)
+const MAX_SCALE = 2.0;       // 줌인 최대 2배 (기본에서 20% 가까워지면 도달)
+const AVATAR_BASE_SCALE = 0.084; // 기본 거리 아바타 크기 (0.028 × 3)
+
+function UserMarker({ position, user, onClick }) {
   const scaleRef = useRef();
   const [hovered, setHovered] = useState(false);
+  const { camera } = useThree();
 
-  // 지구 표면 법선 방향(position)으로 Y축을 맞추는 쿼터니언
+  // 지구 표면 법선 방향(position)으로 Y축을 맞추는 쿼터니언 → 아바타가 지표면에 수직으로 섬
   const quaternion = useMemo(() => {
     const up = new THREE.Vector3(0, 1, 0);
     const dir = position.clone().normalize();
     return new THREE.Quaternion().setFromUnitVectors(up, dir);
   }, [position]);
 
-  // 줌 최대(카메라 z=1.5)일 때 아바타 = 지구 크기의 1%
-  // 지구 반지름 ≈ 1 → 지구 지름 2 → 1% = 0.02 world units
-  // 아바타 모델 키 ≈ 1.7 → scale = 0.02 / 1.7 ≈ 0.012
-  const SCALE_AT_MAX_ZOOM = 0.012;
-  const MAX_ZOOM_DIST = 1.5; // zoomRef 최솟값
-
   useFrame(() => {
     if (!scaleRef.current) return;
-    // 카메라가 가까울수록(zoomRef 작을수록) 아바타 커짐
-    const dynamicScale = SCALE_AT_MAX_ZOOM * (MAX_ZOOM_DIST / zoomRef.current);
-    const target = (hovered ? 1.3 : 1.0) * dynamicScale;
+
+    // 카메라는 항상 원점을 바라보므로 position.length() = 줌 거리와 동일
+    // 기본 거리 기준으로 1% 줌인마다 5%씩 커지고, 1% 줌아웃마다 5%씩 작아짐
+    const dist = camera.position.length();
+    const dynamicScale = THREE.MathUtils.clamp(1 + (1 - dist / BASE_DISTANCE) * 5, MIN_SCALE, MAX_SCALE);
+
+    // 호버 배율(1.3×) × 거리 배율 × 아바타 기본 크기
+    const target = (hovered ? 1.3 : 1.0) * dynamicScale * AVATAR_BASE_SCALE;
     const s = scaleRef.current.scale.x;
     scaleRef.current.scale.setScalar(s + (target - s) * 0.15);
   });
 
   return (
-    // 외부 그룹: position + quaternion만 담당, ref 없음 → useFrame 간섭 없음
+    // 외부 그룹: position + quaternion + 이벤트 담당
     <group
       position={position}
       quaternion={quaternion}
@@ -173,8 +185,14 @@ function UserMarker({ position, user, onClick, zoomRef }) {
         </Suspense>
       </group>
 
+      {/* 호버 시 이름 라벨 — body 포털로 canvas overflow 잘림 방지 */}
       {hovered && (
-        <Html center distanceFactor={8} style={{ pointerEvents: "none" }}>
+        <Html
+          center
+          distanceFactor={8}
+          portal={htmlLabelPortal}
+          style={{ pointerEvents: "none", zIndex: 10000 }}
+        >
           <div style={labelStyle}>{user.name}</div>
         </Html>
       )}
@@ -184,7 +202,7 @@ function UserMarker({ position, user, onClick, zoomRef }) {
 
 // ──────────────────────────────────────────────────────────────────
 // 4. 카메라 컨트롤러
-//    - 평소엔 (0,0,3)에서 지구 정면을 본다.
+//    - 평소엔 (0,0,zoomRef)에서 지구 정면을 본다.
 //    - 유저가 선택되면 그 유저의 표면 좌표 바깥쪽으로 부드럽게 이동.
 // ──────────────────────────────────────────────────────────────────
 function CameraRig({ selectedUser, earthRef, zoomRef }) {
@@ -218,7 +236,7 @@ function CameraRig({ selectedUser, earthRef, zoomRef }) {
 export default function EarthCommunity() {
   const [selectedUser, setSelectedUser] = useState(null);
   const earthRef = useRef();           // 카메라 릭에서 회전 행렬을 읽기 위함
-  const dragRef = useRef({ dragging: false, lastX: 0, lastY: 0, deltaX: 0, deltaY: 0 });
+  const dragRef = useRef({ dragging: false, lastX: 0, lastY: 0, deltaX: 0, deltaY: 0, pausedUntil: 0 });
   const zoomRef = useRef(3); // 카메라 Z 거리 (기본 3, 범위 1.5~6)
 
   // 자동 회전: 선택된 유저가 없을 때만
@@ -242,7 +260,10 @@ export default function EarthCommunity() {
     dragRef.current.deltaY += dy * 0.005;
   };
   const handlePointerUp = () => {
-    dragRef.current.dragging = false;
+    if (dragRef.current.dragging) {
+      dragRef.current.dragging = false;
+      dragRef.current.pausedUntil = Date.now() + 3000; // 드래그 후 3초 정지
+    }
   };
 
   // 전역 mouseup으로 캔버스 밖에서 떼도 처리
@@ -259,38 +280,44 @@ export default function EarthCommunity() {
 
   return (
     <div style={wrapperStyle}>
-      <div
-        style={canvasWrapStyle}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onWheel={handleWheel}
+      <GlobalTopNav />
+      <p
+        style={{
+          margin: 0,
+          padding: "18px 60px 14px",
+          fontSize: 12,
+          opacity: 0.72,
+          color: "#fff",
+          flexShrink: 0,
+        }}
       >
-        <Canvas camera={{ position: [0, 0, 3], fov: 45 }}>
-          <ambientLight intensity={0.6} />
-          <directionalLight position={[5, 3, 5]} intensity={1.1} />
-          <Suspense fallback={null}>
-            <EarthScene
+        드래그해서 지구를 돌리고, 캐릭터를 클릭해보세요.
+      </p>
+      <div style={canvasHostStyle}>
+        <div
+          style={canvasWrapStyle}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onWheel={handleWheel}
+        >
+          <Canvas camera={{ position: [0, 0, 3.35], fov: 45 }}>
+            <ambientLight intensity={0.6} />
+            <directionalLight position={[5, 3, 5]} intensity={1.1} />
+            <Suspense fallback={null}>
+              <EarthScene
                 autoRotate={autoRotate}
                 onSelectUser={setSelectedUser}
                 groupRef={earthRef}
                 dragRef={dragRef}
-                zoomRef={zoomRef}
               />
-          </Suspense>
-          <CameraRig selectedUser={selectedUser} earthRef={earthRef} zoomRef={zoomRef} />
-          {/* 드래그 회전을 직접 구현했기 때문에 OrbitControls는 비활성.
-              필요하면 enableRotate=false로 줌만 살리는 식으로 활용 가능. */}
-          {/* <OrbitControls enableRotate={false} enablePan={false} /> */}
-        </Canvas>
+            </Suspense>
+            <CameraRig selectedUser={selectedUser} earthRef={earthRef} zoomRef={zoomRef} />
+            {/* 드래그 회전을 직접 구현했기 때문에 OrbitControls는 비활성.
+                필요하면 enableRotate=false로 줌만 살리는 식으로 활용 가능. */}
+            {/* <OrbitControls enableRotate={false} enablePan={false} /> */}
+          </Canvas>
+        </div>
       </div>
-
-      {/* 헤더 */}
-      <header style={headerStyle}>
-        <h1 style={{ margin: 0, fontSize: 20 }}>🌍 Globe Community</h1>
-        <p style={{ margin: "4px 0 0", opacity: 0.7, fontSize: 13 }}>
-          드래그해서 지구를 돌리고, 캐릭터를 클릭해보세요.
-        </p>
-      </header>
 
       {/* 유저 상세 패널 */}
       <UserPanel user={selectedUser} onClose={() => setSelectedUser(null)} />
@@ -343,10 +370,19 @@ const wrapperStyle = {
   position: "relative",
   width: "100%",
   height: "100vh",
+  display: "flex",
+  flexDirection: "column",
   background: "radial-gradient(circle at 50% 50%, #0b1026 0%, #04060f 100%)",
   color: "white",
   fontFamily: "Inter, system-ui, sans-serif",
   overflow: "hidden",
+};
+
+const canvasHostStyle = {
+  position: "relative",
+  flex: 1,
+  minHeight: 0,
+  width: "100%",
 };
 
 const canvasWrapStyle = {
@@ -356,17 +392,9 @@ const canvasWrapStyle = {
   touchAction: "none",
 };
 
-const headerStyle = {
-  position: "absolute",
-  top: 24,
-  left: 24,
-  zIndex: 2,
-  pointerEvents: "none",
-};
-
 const panelStyle = {
   position: "absolute",
-  top: 24,
+  top: 100,
   right: 24,
   bottom: 24,
   width: 320,
@@ -395,11 +423,11 @@ const closeBtnStyle = {
 };
 
 const labelStyle = {
-  background: "rgba(0,0,0,0.7)",
+  background: "rgba(0,0,0,0.78)",
   color: "white",
-  padding: "4px 10px",
+  padding: "6px 12px",
   borderRadius: 999,
   fontSize: 12,
   whiteSpace: "nowrap",
-  transform: "translateY(-24px)",
+  transform: "translateY(14px)",
 };
