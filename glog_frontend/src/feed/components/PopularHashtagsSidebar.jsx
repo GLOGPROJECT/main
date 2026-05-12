@@ -1,7 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import api from '../../api/axios';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { fetchPopularHashtags } from '../api/searchApi';
 import { getTagPillColors } from '../utils/tagPillColors';
+
+const SIDEBAR_LIMIT = 8;
 
 function formatCompactCount(n) {
   const x = Math.max(0, Math.floor(Number(n) || 0));
@@ -11,29 +14,32 @@ function formatCompactCount(n) {
 }
 
 export default function PopularHashtagsSidebar() {
-  const [rows, setRows] = useState([]);
-  const [err, setErr] = useState('');
+  const queryClient = useQueryClient();
+  const { data: rows = [], isError } = useQuery({
+    queryKey: ['hashtags', 'popularSidebar', SIDEBAR_LIMIT],
+    queryFn: () => fetchPopularHashtags(SIDEBAR_LIMIT),
+    staleTime: 30_000,
+  });
 
   useEffect(() => {
-    let cancelled = false;
-    api
-      .get('/hashtags/popular')
-      .then(({ data }) => {
-        if (!cancelled) setRows(Array.isArray(data) ? data : []);
-      })
-      .catch(() => {
-        if (!cancelled) setErr('인기 태그를 불러오지 못했습니다.');
-      });
-    return () => {
-      cancelled = true;
+    const bump = () => {
+      void queryClient.invalidateQueries({ queryKey: ['hashtags', 'popularSidebar'] });
     };
-  }, []);
+    window.addEventListener('glog:new-post', bump);
+    window.addEventListener('glog:post-updated', bump);
+    return () => {
+      window.removeEventListener('glog:new-post', bump);
+      window.removeEventListener('glog:post-updated', bump);
+    };
+  }, [queryClient]);
+
+  const err = isError ? '인기 태그를 불러오지 못했습니다.' : '';
 
   return (
     <div className="feed-card feed-popular-tags">
       <div className="feed-popular-tags__head">
         <h3 className="feed-popular-tags__title">🔥 인기 태그</h3>
-        <Link to="/feed/tag" className="feed-popular-tags__more">
+        <Link to="/feed/tag?view=feed" className="feed-popular-tags__more">
           더보기 &gt;
         </Link>
       </div>

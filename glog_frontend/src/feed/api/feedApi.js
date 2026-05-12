@@ -149,6 +149,16 @@ export async function togglePostLike(postId) {
   };
 }
 
+/** POST /api/projects/trophies/:trophyId/like — 트로피 좋아요 토글(피드 게시글과 동일하게 본인 프로젝트 허용) */
+export async function toggleTrophyLike(trophyId) {
+  const tid = Number(trophyId);
+  const { data } = await api.post(`/projects/trophies/${tid}/like`);
+  return {
+    liked: Boolean(data?.liked),
+    likeCount: Number(data?.like_count ?? 0),
+  };
+}
+
 /** GET /feed/suggested-users — 로그인 시 팀원 등 추천 */
 export async function fetchSuggestedUsersForFollow(limit = 15) {
   const { data } = await api.get('/feed/suggested-users', { params: { limit } });
