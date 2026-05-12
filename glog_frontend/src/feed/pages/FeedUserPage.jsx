@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/hooks/useAuth';
 import FeedTabs from '../components/FeedTabs';
@@ -16,6 +17,18 @@ export default function FeedUserPage() {
   const goAllFeed = () => navigate('/feed');
 
   const isOwnProfile = user != null && Number(user.user_id) === uid;
+  const [prependPosts, setPrependPosts] = useState([]);
+
+  useEffect(() => {
+    if (!isOwnProfile) return;
+    const onNew = (e) => {
+      const post = e.detail;
+      if (!post?.id) return;
+      setPrependPosts((prev) => [post, ...prev.filter((p) => p.id !== post.id)]);
+    };
+    window.addEventListener('glog:new-post', onNew);
+    return () => window.removeEventListener('glog:new-post', onNew);
+  }, [isOwnProfile]);
 
   if (invalidId) {
     return (
@@ -57,7 +70,7 @@ export default function FeedUserPage() {
           </div>
         </div>
       </div>
-      <FeedList feedType="user" sortOrder="latest" userId={uid} tagSlug="" />
+      <FeedList feedType="user" sortOrder="latest" userId={uid} tagSlug="" prependPosts={isOwnProfile ? prependPosts : []} />
     </>
   );
 }

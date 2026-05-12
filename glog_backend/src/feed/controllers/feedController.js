@@ -139,7 +139,12 @@ async function listUserFeed(req, res, next) {
     }
     const viewerId = req.user?.userId ?? null;
     const base = publicBaseFromReq(req);
-    const result = await feedService.listUserFeed(uid, { last_post_id: req.query.last_post_id, limit: req.query.limit }, viewerId, base);
+    const result = await feedService.listUserFeed(
+      uid,
+      { last_post_id: req.query.last_post_id, limit: req.query.limit, sort: req.query.sort },
+      viewerId,
+      base,
+    );
     res.json(result);
   } catch (err) {
     const sent = handleFeedError(err, res);

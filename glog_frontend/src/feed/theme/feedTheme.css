@@ -1739,7 +1739,106 @@ button.feed-post-author-link-btn {
   overflow-y: auto;
 }
 
-.feed-autocomplete button {
+.feed-autocomplete--compose {
+  max-height: 280px;
+}
+
+.feed-autocomplete-section-title {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--feed-muted);
+  padding: 0.4rem 0.65rem 0.2rem;
+  border-bottom: 1px solid var(--feed-border);
+  background: var(--feed-bg-page);
+}
+
+.feed-autocomplete-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.45rem 0.65rem;
+  border: none;
+  border-bottom: 1px solid var(--feed-border);
+  background: transparent;
+  color: var(--feed-text-primary);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.feed-autocomplete-row:last-child {
+  border-bottom: none;
+}
+
+.feed-autocomplete-count {
+  font-size: 0.72rem;
+  color: var(--feed-muted);
+  flex-shrink: 0;
+}
+
+.feed-autocomplete-row:hover {
+  background: var(--feed-bg-page);
+}
+
+.feed-autocomplete-registered-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+  border-bottom: 1px solid var(--feed-border);
+  min-height: 2.1rem;
+}
+
+.feed-autocomplete-registered-row:last-child {
+  border-bottom: none;
+}
+
+.feed-autocomplete-registered-name {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  padding: 0.45rem 0.65rem;
+  border: none;
+  background: transparent;
+  color: var(--feed-text-primary);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.feed-autocomplete-registered-name:hover {
+  background: var(--feed-bg-page);
+}
+
+.feed-autocomplete-registered-remove {
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  margin-right: 0.25rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--feed-muted);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.feed-autocomplete-registered-remove:hover {
+  color: var(--feed-text-primary);
+  background: var(--feed-bg-page);
+}
+
+.feed-hashtag-count {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  color: var(--feed-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.feed-autocomplete button:not(.feed-autocomplete-row) {
   display: block;
   width: 100%;
   text-align: left;
@@ -1751,7 +1850,7 @@ button.feed-post-author-link-btn {
   cursor: pointer;
 }
 
-.feed-autocomplete button:hover {
+.feed-autocomplete button:not(.feed-autocomplete-row):hover {
   background: var(--feed-bg-page);
 }
 
@@ -2075,5 +2174,56 @@ button.feed-post-author-link-btn {
   border-top: 1px solid var(--feed-border);
   margin-top: 0.25rem;
   padding-top: 0.25rem;
+}
+
+/* 프로필·지구본 게시글 미리보기 팝업 */
+.feed-post-popup-modal .feed-post-actions {
+  margin-top: 1.55rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--feed-border-subtle, rgba(15, 23, 42, 0.1));
+}
+
+.feed-post-popup-modal .feed-comment-compose-sticky {
+  position: static;
+  background: none;
+  margin-top: 0.75rem;
+  padding-top: 0;
+}
+
+.feed-post-popup-modal .feed-comment-compose-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.feed-post-popup-modal .feed-comment-compose-row > .feed-avatar {
+  align-self: center;
+}
+
+.feed-post-popup-modal .feed-comment-compose-field-wrap {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.feed-post-popup-modal .feed-comment-compose-field-wrap .feed-comment-textarea-inline {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.feed-post-popup-modal .feed-comment-submit-btn {
+  flex-shrink: 0;
+  justify-self: end;
+  white-space: nowrap;
+}
+
+.feed-post-popup-modal .feed-comment-compose-counter {
+  margin-top: 0.45rem;
+}
+
+.feed-post-popup-modal-comments-wrap {
+  margin-top: 1.35rem;
 }
 

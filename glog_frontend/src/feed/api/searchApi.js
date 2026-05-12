@@ -38,6 +38,12 @@ export async function fetchHashtagAutocomplete(q) {
   return Array.isArray(data) ? data : [];
 }
 
+/** GET /hashtags/popular — 인기순 */
+export async function fetchPopularHashtags(limit = 200) {
+  const { data } = await api.get('/hashtags/popular', { params: { limit } });
+  return Array.isArray(data) ? data : [];
+}
+
 /** GET /search/autocomplete — 유저 + 해시태그·글 힌트 */
 export async function fetchSearchAutocomplete(q) {
   const trimmed = String(q ?? '').trim().slice(0, 100);

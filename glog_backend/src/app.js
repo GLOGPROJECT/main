@@ -22,6 +22,9 @@ app.use('/api', require('./routes/index'));
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
+const { startStreakSyncScheduler } = require('./cron/streakCron');
+startStreakSyncScheduler();
+
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`[Server] Running on port ${PORT}`);

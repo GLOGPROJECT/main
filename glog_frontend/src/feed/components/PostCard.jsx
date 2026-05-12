@@ -6,18 +6,19 @@ import { togglePostLike } from '../api/feedApi';
 import { ANON_AVATAR_SRCS, getAnonAvatarIndex, isAnonymousPost } from '../utils/anonAvatar';
 import { getTagPillColors } from '../utils/tagPillColors';
 
-function HeartIcon({ filled }) {
+export function HeartIcon({ filled }) {
   const d =
     'M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z';
+  const svgStyle = { pointerEvents: 'none' };
   if (filled) {
     return (
-      <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden className="feed-post-heart-svg">
+      <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden className="feed-post-heart-svg" style={svgStyle}>
         <path fill="currentColor" d={d} />
       </svg>
     );
   }
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden className="feed-post-heart-svg">
+    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden className="feed-post-heart-svg" style={svgStyle}>
       <path fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinejoin="round" d={d} />
     </svg>
   );
@@ -25,8 +26,10 @@ function HeartIcon({ filled }) {
 
 /**
  * @param {'link'|'static'} [variant] — static: 상세 페이지용(전체 카드 링크 없음)
+ * @param {(post: object) => void} [onSelect] — 있으면 상세 링크 대신 클릭 시 호출(프로필 내 글 팝업 등)
+ * @param {(detail: { postId: number; liked: boolean; likeCount: number }) => void} [onLikeChange] — 좋아요 토글 성공 후(다른 목록 동기화용)
  */
-export default function PostCard({ post, variant = 'link' }) {
+export default function PostCard({ post, variant = 'link', onSelect, onLikeChange }) {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { openModal } = useLoginModal();
@@ -65,6 +68,7 @@ export default function PostCard({ post, variant = 'link' }) {
         const { liked: nextLiked, likeCount: nextCount } = await togglePostLike(id);
         setLiked(nextLiked);
         setLikeCount(nextCount);
+        onLikeChange?.({ postId: id, liked: nextLiked, likeCount: nextCount });
       } catch {
         /* 요청 실패 시 UI 유지 */
       } finally {
@@ -72,7 +76,7 @@ export default function PostCard({ post, variant = 'link' }) {
         setLikeBusy(false);
       }
     },
-    [user, id, openModal, navigate]
+    [user, id, openModal, navigate, onLikeChange]
   );
 
   const inner = (
@@ -239,6 +243,27 @@ export default function PostCard({ post, variant = 'link' }) {
   if (isStatic) {
     return (
       <article className="feed-card feed-post" aria-label={`${author.handle} 게시글`}>
+        {inner}
+      </article>
+    );
+  }
+
+  if (typeof onSelect === 'function') {
+    return (
+      <article
+        className="feed-card feed-post"
+        role="button"
+        tabIndex={0}
+        aria-label={`${author.handle} 게시글 열기`}
+        style={{ cursor: 'pointer' }}
+        onClick={() => onSelect(post)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onSelect(post);
+          }
+        }}
+      >
         {inner}
       </article>
     );

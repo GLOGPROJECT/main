@@ -1,5 +1,6 @@
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/hooks/useAuth';
+import { useTrophyModal } from '../feed/trophy/TrophyModalContext';
 import './GlobalTopNav.css';
 
 const BACKEND_URL = 'http://localhost:4000';
@@ -7,6 +8,7 @@ const BACKEND_URL = 'http://localhost:4000';
 /** `/`, `/globe`, `/feed` 등에서 동일한 상단 메뉴 */
 export default function GlobalTopNav() {
   const { user, logout } = useAuth();
+  const { openTrophyModal, isTrophyModalOpen } = useTrophyModal();
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const isLoggedIn = Boolean(user);
@@ -29,9 +31,13 @@ export default function GlobalTopNav() {
         </NavLink>
       </div>
       <nav className="gtn-nav" aria-label="주 메뉴">
-        <span className="gtn-link gtn-link-disabled" aria-disabled="true" title="준비 중">
+        <NavLink
+          to={isLoggedIn ? '/globe' : '/'}
+          state={isLoggedIn ? { openMyProfile: true } : undefined}
+          className="gtn-link"
+        >
           프로필
-        </span>
+        </NavLink>
         <NavLink
           to="/feed"
           className={({ isActive }) =>
@@ -40,9 +46,13 @@ export default function GlobalTopNav() {
         >
           피드
         </NavLink>
-        <a href="#trophy" className="gtn-link">
+        <button
+          type="button"
+          className={`gtn-link${isTrophyModalOpen ? ' gtn-active' : ''}`}
+          onClick={() => openTrophyModal()}
+        >
           트로피
-        </a>
+        </button>
         <a href="#shop" className="gtn-link">
           상점
         </a>

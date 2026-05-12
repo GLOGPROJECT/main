@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useDeferredValue, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import api from '../../api/axios';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { getMockHashtagSuggestions } from '../mocks/feedMock';
 import { fetchLinkPreview } from '../api/feedApi';
+import { fetchHashtagAutocomplete, fetchPopularHashtags } from '../api/searchApi';
+import { readSubscribedTagSlugs, removeSubscribedTagSlug } from '../utils/tagSubscribeStorage';
 import { ANON_AVATAR_SRCS, ANON_AVATAR_COUNT, getAnonAvatarIndex, getStableAnonIndexFromPostId } from '../utils/anonAvatar';
 import { getTagPillColors } from '../utils/tagPillColors';
 
@@ -16,6 +19,13 @@ const MAX_TAGS = 5;
 const MAX_IMAGES = 4;
 const MAX_BYTES = 5 * 1024 * 1024;
 const MIME_OK = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+
+function formatTagPostCount(n) {
+  const x = Math.max(0, Math.floor(Number(n) || 0));
+  if (x >= 1_000_000) return `${(x / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+  if (x >= 1_000) return `${(x / 1_000).toFixed(1).replace(/\.0$/, '')}k`;
+  return String(x);
+}
 
 function visToApi(vis) {
   if (vis === '익명') return 'anonymous';
@@ -132,12 +142,40 @@ export default function ComposeModal({ open, onClose, editPost = null, initialAc
   const blurTimer = useRef(null);
 
   const { body: composedBody, code: composedCode } = useMemo(() => blocksToDraft(blocks), [blocks]);
+  const leadCheck = useMemo(() => {
+    const firstCodeIdx = blocks.findIndex((b) => b.type === 'code');
+    let leadingPlainText = '';
+    if (firstCodeIdx < 0) {
+      leadingPlainText = blocks
+        .filter((b) => b.type === 'text')
+        .map((b) => b.value || '')
+        .join('\n')
+        .trim();
+    } else {
+      for (let i = 0; i < firstCodeIdx; i++) {
+        const b = blocks[i];
+        if (b.type === 'text') leadingPlainText += b.value || '';
+      }
+      leadingPlainText = leadingPlainText.trim();
+    }
+    const isEdit = Boolean(editPost);
+    const pendingLink = !isEdit && linkUrlDraft.trim().length > 0;
+    const needsLeadingPlain =
+      blocks.some((b) => b.type === 'code') ||
+      images.length > 0 ||
+      Boolean(linkPreview?.url) ||
+      pendingLink;
+    return {
+      leadingPlainOk: !needsLeadingPlain || leadingPlainText.length >= 1,
+    };
+  }, [blocks, images.length, linkPreview?.url, linkUrlDraft, editPost]);
   const currentAuthor = useMemo(
     () => ({
       handle: user?.nickname || user?.username || user?.handle || user?.name || 'me',
       title: user?.bio || 'GitHub User',
       streak: '',
       avatarUrl: user?.avatar_url || undefined,
+      userId: user?.user_id != null && Number(user.user_id) >= 1 ? Number(user.user_id) : undefined,
     }),
     [user]
   );
@@ -145,13 +183,94 @@ export default function ComposeModal({ open, onClose, editPost = null, initialAc
   const overBody = bodyLen > MAX_BODY;
   const needsTags = vis === '공개';
   const tagsOk = !needsTags || tags.length >= 1;
-  const canSubmit = composedBody.trim().length > 0 && !overBody && !loading && tagsOk;
+  const canSubmit =
+    composedBody.trim().length > 0 && !overBody && !loading && tagsOk && leadCheck.leadingPlainOk;
 
-  const autocompleteList = useMemo(() => {
-    if (tags.length >= MAX_TAGS) return [];
-    const q = tagDraft.replace(/^#+/, '').trim().toLowerCase();
-    return getMockHashtagSuggestions(q);
-  }, [tagDraft, tags.length]);
+  const deferredTagDraft = useDeferredValue(tagDraft);
+  const tagQueryNorm = useMemo(
+    () => deferredTagDraft.replace(/^#+/, '').trim().toLowerCase(),
+    [deferredTagDraft]
+  );
+
+  const [tagSubsRev, setTagSubsRev] = useState(0);
+  useEffect(() => {
+    const bump = () => setTagSubsRev((n) => n + 1);
+    window.addEventListener('glog:tag-subs-changed', bump);
+    return () => window.removeEventListener('glog:tag-subs-changed', bump);
+  }, []);
+
+  const { data: popularRowsRaw = [] } = useQuery({
+    queryKey: ['hashtags', 'popularForCompose', 200],
+    queryFn: () => fetchPopularHashtags(200),
+    enabled: Boolean(open && needsTags),
+    staleTime: 60_000,
+  });
+
+  const { data: acRowsRaw = [] } = useQuery({
+    queryKey: ['hashtags', 'autocompleteCompose', tagQueryNorm],
+    queryFn: () => fetchHashtagAutocomplete(tagQueryNorm),
+    enabled: Boolean(open && needsTags && tagQueryNorm.length >= 1),
+    staleTime: 15_000,
+  });
+
+  const { recommendRows } = useMemo(() => {
+    if (tags.length >= MAX_TAGS) return { recommendRows: [] };
+    const takenLower = new Set(tags.map((t) => t.toLowerCase()));
+    const tryName = (name, useCount) => {
+      const n = String(name || '').trim();
+      if (!n || takenLower.has(n.toLowerCase())) return null;
+      return { name: n, use_count: Number(useCount) || 0 };
+    };
+
+    const popularList =
+      popularRowsRaw.length > 0
+        ? popularRowsRaw
+        : getMockHashtagSuggestions(tagQueryNorm || '').map((x) => ({
+            name: x.tag,
+            use_count: typeof x.posts === 'number' ? x.posts : Number(x.posts) || 0,
+          }));
+
+    const outRec = [];
+    const seenRec = new Set();
+
+    if (!tagQueryNorm) {
+      for (const r of popularList) {
+        const row = tryName(r.name, r.use_count);
+        if (!row || seenRec.has(row.name.toLowerCase())) continue;
+        seenRec.add(row.name.toLowerCase());
+        outRec.push(row);
+        if (outRec.length >= 5) break;
+      }
+    } else {
+      for (const r of popularList) {
+        if (!String(r.name || '').toLowerCase().includes(tagQueryNorm)) continue;
+        const row = tryName(r.name, r.use_count);
+        if (!row || seenRec.has(row.name.toLowerCase())) continue;
+        seenRec.add(row.name.toLowerCase());
+        outRec.push(row);
+        if (outRec.length >= 5) break;
+      }
+      for (const r of acRowsRaw || []) {
+        if (outRec.length >= 5) break;
+        const row = tryName(r.name, r.use_count);
+        if (!row || seenRec.has(row.name.toLowerCase())) continue;
+        seenRec.add(row.name.toLowerCase());
+        outRec.push(row);
+      }
+    }
+
+    return { recommendRows: outRec };
+  }, [popularRowsRaw, acRowsRaw, tagQueryNorm, tags, tagSubsRev]);
+
+  const registeredRows = useMemo(() => {
+    const out = [];
+    for (const slug of readSubscribedTagSlugs()) {
+      if (out.length >= 5) break;
+      if (tagQueryNorm && !String(slug).toLowerCase().includes(tagQueryNorm)) continue;
+      out.push(String(slug).trim());
+    }
+    return out;
+  }, [tagQueryNorm, tagSubsRev]);
 
   const revokeObjectUrls = useCallback((list) => {
     list.forEach((i) => {
@@ -282,11 +401,17 @@ export default function ComposeModal({ open, onClose, editPost = null, initialAc
     (raw) => {
       const t = raw.replace(/^#+/, '').trim();
       if (!t || tags.length >= MAX_TAGS) return;
-      setTags((prev) => (prev.includes(t) ? prev : [...prev, t]));
+      const lower = t.toLowerCase();
+      setTags((prev) => (prev.some((x) => x.toLowerCase() === lower) ? prev : [...prev, t]));
       setTagDraft('');
     },
-    [tags.length]
+    [tags]
   );
+
+  const removeRegisteredTag = useCallback((slug) => {
+    removeSubscribedTagSlug(slug);
+    setTags((prev) => prev.filter((x) => x.toLowerCase() !== String(slug).toLowerCase()));
+  }, []);
 
   const loadLinkPreview = useCallback(async () => {
     setLinkFetchError('');
@@ -595,41 +720,86 @@ export default function ComposeModal({ open, onClose, editPost = null, initialAc
                       {t}
                       <button
                         type="button"
+                        className="feed-tag-pill-x"
                         aria-label={`${t} 태그 제거`}
                         onClick={() => setTags((prev) => prev.filter((x) => x !== t))}
-                        style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, color: 'inherit', fontSize: '0.85rem', lineHeight: 1 }}
+                        style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: '0 0 0 4px', color: 'inherit', fontSize: '0.9rem', lineHeight: 1, fontWeight: 700 }}
                       >
                         ×
                       </button>
                     </span>
                   ))}
-                  <input
-                    type="text"
-                    disabled={tagInputDisabled}
-                    placeholder={tagInputDisabled ? '태그 5개까지' : '# 태그 입력'}
-                    value={tagDraft}
-                    onChange={(e) => setTagDraft(e.target.value)}
-                    onFocus={onTagFocus}
-                    onBlur={onTagBlur}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        addTag(tagDraft);
-                      }
-                    }}
-                    style={{ border: 'none', outline: 'none', flex: 1, minWidth: 120, background: 'transparent', color: 'var(--feed-text-primary)' }}
-                  />
+                  <div style={{ display: 'flex', flex: 1, minWidth: 120, alignItems: 'center', gap: '0.5rem' }}>
+                    <input
+                      type="text"
+                      disabled={tagInputDisabled}
+                      placeholder={tagInputDisabled ? '태그 5개까지' : '# 태그 입력'}
+                      value={tagDraft}
+                      onChange={(e) => setTagDraft(e.target.value)}
+                      onFocus={onTagFocus}
+                      onBlur={onTagBlur}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          addTag(tagDraft);
+                        }
+                      }}
+                      style={{ border: 'none', outline: 'none', flex: 1, minWidth: 60, background: 'transparent', color: 'var(--feed-text-primary)' }}
+                    />
+                    <span className="feed-hashtag-count" aria-live="polite">
+                      {tags.length}/{MAX_TAGS}
+                    </span>
+                  </div>
                 </div>
-                {tagFocused && autocompleteList.length > 0 && !tagInputDisabled ? (
-                  <div className="feed-autocomplete" role="listbox">
-                    {autocompleteList.map((h) => (
-                      <button key={h.tag} type="button" role="option" onMouseDown={(e) => e.preventDefault()} onClick={() => addTag(h.tag)}>
-                        {h.tag}
-                      </button>
-                    ))}
+                {tagFocused && !tagInputDisabled && (recommendRows.length > 0 || registeredRows.length > 0) ? (
+                  <div className="feed-autocomplete feed-autocomplete--compose" role="listbox">
+                    {recommendRows.length > 0 ? (
+                      <>
+                        <div className="feed-autocomplete-section-title">추천 태그 Top 5</div>
+                        {recommendRows.map((h) => (
+                          <button
+                            key={`rec-${h.name}`}
+                            type="button"
+                            className="feed-autocomplete-row"
+                            role="option"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => addTag(h.name)}
+                          >
+                            <span>{h.name}</span>
+                            <span className="feed-autocomplete-count">{formatTagPostCount(h.use_count)}</span>
+                          </button>
+                        ))}
+                      </>
+                    ) : null}
+                    {registeredRows.length > 0 ? (
+                      <>
+                        <div className="feed-autocomplete-section-title">등록 태그</div>
+                        {registeredRows.map((name) => (
+                          <div key={`reg-${name}`} className="feed-autocomplete-registered-row" role="option">
+                            <button
+                              type="button"
+                              className="feed-autocomplete-registered-name"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => addTag(name)}
+                            >
+                              {name}
+                            </button>
+                            <button
+                              type="button"
+                              className="feed-autocomplete-registered-remove"
+                              aria-label={`${name} 등록 해제`}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => removeRegisteredTag(name)}
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                      </>
+                    ) : null}
                   </div>
                 ) : null}
-                <p className="feed-api-hint">GET /hashtags/autocomplete?q= (목: 인기+기존 태그에서 상위 5)</p>
+                <p className="feed-api-hint">추천: 인기 태그 · 등록 태그: 피드에서 구독한 태그(X로 목록에서 제거)</p>
               </>
             ) : null}
 

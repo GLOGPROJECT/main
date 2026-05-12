@@ -188,6 +188,23 @@ function encodeLinkFooter(linkPreview) {
   return `\n\n<!--GLOG_LINK:${Buffer.from(payload, 'utf8').toString('base64')}-->`;
 }
 
+/** 코드 펜스·이미지·링크 미리보기가 있으면 본문 맨 앞(첫 ``` 이전)에 일반 글 1자 이상 */
+function validateLeadingPlainForPost(rawTrimmed, { hasImages, hasLinkPreview }) {
+  const trimmed = String(rawTrimmed ?? '').trim();
+  const { content: bodyWithoutLink } = splitContentAndLink(trimmed);
+  const hasFence = bodyWithoutLink.includes('```');
+  const rich = hasFence || hasImages || Boolean(hasLinkPreview);
+  if (!rich) return;
+  const i = bodyWithoutLink.indexOf('```');
+  const leading = (i < 0 ? bodyWithoutLink : bodyWithoutLink.slice(0, i)).trim();
+  if (!leading) {
+    throw err(
+      'VALIDATION_ERROR',
+      '코드 블록·이미지·링크 미리보기를 사용하는 경우 본문 맨 위에 글자를 1자 이상 입력해 주세요.'
+    );
+  }
+}
+
 /**
  * @param {import('@prisma/client').Post & { user?: object, images?: object[], post_hashtags?: object[], likes?: object[] }} post
  */
@@ -400,8 +417,9 @@ async function listTagFeed(tagname, { last_post_id, limit: limitRaw, sort }, vie
   };
 }
 
-async function listUserFeed(targetUserId, { last_post_id, limit: limitRaw }, viewerId, publicBase) {
+async function listUserFeed(targetUserId, { last_post_id, limit: limitRaw, sort: sortRaw }, viewerId, publicBase) {
   const limit = clampLimit(limitRaw);
+  const sort = String(sortRaw || '').toLowerCase() === 'popular' ? 'popular' : 'latest';
   const user = await prisma.user.findUnique({
     where: { user_id: targetUserId },
     select: { user_id: true, is_deleted: true, is_private: true },
@@ -425,6 +443,7 @@ async function listUserFeed(targetUserId, { last_post_id, limit: limitRaw }, vie
     last_post_id,
     limit,
     publicBase,
+    sort,
   });
 }
 
@@ -655,6 +674,11 @@ async function createPost(authorId, payload, files, publicBase) {
   const type = validateType(payload.type, { required: true });
   const tagNames = normalizeHashtagList(payload.hashtags);
   const linkPreview = normalizeLinkPreviewForDb(payload.link_preview);
+  const uploadedImages = Array.isArray(files) ? files.filter((f) => f && f.filename) : [];
+  validateLeadingPlainForPost(trimmed, {
+    hasImages: uploadedImages.length > 0,
+    hasLinkPreview: Boolean(linkPreview?.url),
+  });
 
   if (type === 'public' && tagNames.length < 1) {
     throw err('VALIDATION_ERROR', '공개 게시글은 해시태그를 1개 이상 입력해 주세요.');
@@ -723,6 +747,14 @@ async function updatePost(authorId, postId, payload, files, publicBase) {
   if (nextContent !== undefined) {
     validateContent(nextContent, { required: true });
   }
+  const incomingImages = Array.isArray(files) ? files.filter((f) => f && f.filename) : [];
+  const finalContentTrimmed =
+    nextContent !== undefined ? String(nextContent).trim() : String(existing.content ?? '').trim();
+  const { link_preview: finalLink } = splitContentAndLink(finalContentTrimmed);
+  validateLeadingPlainForPost(finalContentTrimmed, {
+    hasImages: incomingImages.length > 0,
+    hasLinkPreview: Boolean(finalLink?.url),
+  });
   const nextType = validateType(payload.type, { required: false });
   const replaceTags = Object.prototype.hasOwnProperty.call(payload, 'hashtags');
   const tagNames = replaceTags ? normalizeHashtagList(payload.hashtags) : null;
