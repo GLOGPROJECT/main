@@ -14,6 +14,8 @@ import FeedTagHubPage from './feed/pages/FeedTagHubPage';
 import FeedTagRedirect from './feed/pages/FeedTagRedirect';
 import FeedPostDetailPage from './feed/pages/FeedPostDetailPage';
 import FeedAnonymousPage from './feed/pages/FeedAnonymousPage';
+import FeedSearchRedirect from './feed/pages/FeedSearchRedirect';
+import FeedUserPage from './feed/pages/FeedUserPage';
 import { feedQueryClient } from './feed/queryClient';
 import EarthCommunity from './EarthCommunity';
 
@@ -39,7 +41,9 @@ export default function App() {
                 <Route path="tag" element={<FeedTagHubPage />} />
                 <Route path="tag/:slug" element={<FeedTagRedirect />} />
                 <Route path="post/:postId" element={<FeedPostDetailPage />} />
+                <Route path="user/:userId" element={<FeedUserPage />} />
                 <Route path="anonymous" element={<FeedAnonymousPage />} />
+                <Route path="search" element={<FeedSearchRedirect />} />
               </Route>
 
               {/* 로그인만 필요 (초기설정 진행 중) */}

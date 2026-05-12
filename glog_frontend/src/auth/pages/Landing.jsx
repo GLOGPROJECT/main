@@ -1,11 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import api from '../../api/axios';
+import api, { API_ORIGIN } from '../../api/axios';
 import GlobalTopNav from '../../components/GlobalTopNav';
-
-// 백엔드 서버 주소 - GitHub OAuth 로그인 요청을 이 주소로 보냄
-const BACKEND_URL = 'http://localhost:4000';
 
 // 전역 CSS:
 // - earth-spin: 지구본 무한 회전 (20초 1바퀴)
@@ -90,9 +87,8 @@ export default function Landing() {
       .catch(() => {});
   }, []);
 
-  // 지금 시작하기 버튼 클릭 시 GitHub OAuth 인증 페이지로 이동
   function handleGithubLogin() {
-    window.location.href = `${BACKEND_URL}/api/auth/github`;
+    window.location.href = `${API_ORIGIN}/api/auth/github`;
   }
 
   // 로딩 중에는 배경색만 채운 빈 화면 (깜빡임 방지)

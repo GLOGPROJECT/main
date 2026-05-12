@@ -1,7 +1,29 @@
 import axios from 'axios';
 
+function resolveApiOrigin() {
+  const o = import.meta.env.VITE_API_ORIGIN;
+  if (o) return String(o).replace(/\/$/, '');
+  const base = import.meta.env.VITE_API_BASE_URL;
+  if (base && /^https?:\/\//i.test(String(base))) {
+    try {
+      return new URL(String(base)).origin;
+    } catch {
+      /* ignore */
+    }
+  }
+  return 'http://localhost:4000';
+}
+
+/** 백엔드 루트 (OAuth `GET /api/auth/github` 등). `VITE_API_ORIGIN` 또는 `VITE_API_BASE_URL`에서 유도 */
+export const API_ORIGIN = resolveApiOrigin();
+
+const apiBase =
+  import.meta.env.VITE_API_BASE_URL && /^https?:\/\//i.test(String(import.meta.env.VITE_API_BASE_URL))
+    ? String(import.meta.env.VITE_API_BASE_URL).replace(/\/$/, '')
+    : `${API_ORIGIN}/api`;
+
 const api = axios.create({
-  baseURL: 'http://localhost:4000/api',
+  baseURL: apiBase,
   withCredentials: true, // httpOnly 쿠키(refresh_token) 자동 전송
 });
 
