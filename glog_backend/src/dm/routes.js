@@ -2,6 +2,32 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../config/db');
 const authenticate = require('../auth/middleware');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+
+// 업로드 디렉토리 없으면 생성
+const uploadDir = path.join(process.cwd(), 'uploads', 'dm');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
+// multer 설정 — 로컬 저장, 50MB 제한, 이미지/문서 허용
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
+  },
+});
+const upload = multer({
+  storage,
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+  fileFilter: (req, file, cb) => {
+    // 이미지 + 일반 문서 허용, 동영상 제외
+    const allowed = /image\/(jpeg|png|gif|webp)|application\/(pdf|zip|msword|vnd\.openxmlformats|octet-stream)|text\//;
+    if (allowed.test(file.mimetype)) cb(null, true);
+    else cb(new Error('지원하지 않는 파일 형식입니다.'));
+  },
+});
 
 // POST /api/dm/rooms
 // 상대방과의 DM 방 생성 또는 기존 방 반환
@@ -120,6 +146,18 @@ router.get('/rooms/:roomId/messages', authenticate, async (req, res) => {
     console.error('[GetMessages Error]', err.message);
     res.status(500).json({ message: '서버 오류가 발생했습니다.' });
   }
+});
+
+// POST /api/dm/upload
+// 파일 업로드 후 URL 반환 — 이후 dm:send 소켓 이벤트로 전송
+router.post('/upload', authenticate, upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ message: '파일이 없습니다.' });
+
+  const fileUrl = `/uploads/dm/${req.file.filename}`;
+  // image/* 이면 'image', 아니면 'file'
+  const fileType = req.file.mimetype.startsWith('image/') ? 'image' : 'file';
+
+  res.json({ file_url: fileUrl, file_type: fileType, original_name: req.file.originalname });
 });
 
 module.exports = router;

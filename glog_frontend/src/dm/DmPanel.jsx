@@ -1,14 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../api/axios';
-import { useDmSocket } from './useDmSocket';
+import { useAuth } from '../auth/hooks/useAuth';
 
-// 날짜 구분선 포맷 (예: "2024년 3월 20일")
 function formatDateLabel(dateStr) {
   const d = new Date(dateStr);
   return `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일`;
 }
 
-// 메시지 시각 포맷 (예: "오후 2:34")
 function formatTime(dateStr) {
   const d = new Date(dateStr);
   const h = d.getHours();
@@ -16,7 +14,6 @@ function formatTime(dateStr) {
   return h >= 12 ? `오후 ${h === 12 ? 12 : h - 12}:${m}` : `오전 ${h}:${m}`;
 }
 
-// 방 목록의 마지막 메시지 시각 (오늘이면 시각, 이전이면 날짜)
 function formatRoomTime(dateStr) {
   if (!dateStr) return '';
   const d = new Date(dateStr);
@@ -29,11 +26,12 @@ function formatRoomTime(dateStr) {
   return `${d.getMonth() + 1}월 ${d.getDate()}일`;
 }
 
-// directMode: true면 방 목록 없이 채팅창만 표시 (타유저 DM 진입 시)
-export default function DmPanel({ isOpen, onClose, initialPartnerId }) {
+export default function DmPanel({ isOpen, onClose, initialPartnerId, sendMessage, markRead, registerReceive, registerSent, registerReadAck }) {
   const directMode = !!initialPartnerId;
+  const { user: me } = useAuth();
+  const myUserId = me?.user_id;
+
   const [rooms, setRooms] = useState([]);
-  // directMode일 때는 방 로딩 중임을 표시하기 위해 초기값을 로딩 상태로 관리
   const [activeRoom, setActiveRoom] = useState(null);
   const [directLoading, setDirectLoading] = useState(false);
   const [messages, setMessages] = useState([]);
@@ -41,36 +39,63 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId }) {
   const [loadingRooms, setLoadingRooms] = useState(false);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
   const [search, setSearch] = useState('');
+  const [minimized, setMinimized] = useState(false);
+  // 최소화 상태에서 방 목록 드롭다운 열림 여부
+  const [miniDropdown, setMiniDropdown] = useState(false);
+  // 드래그 위치 (null이면 기본 중앙)
+  const [pos, setPos] = useState(null);
+  const dragging = useRef(false);
+  const dragOffset = useRef({ x: 0, y: 0 });
+  const panelRef = useRef(null);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
+  const miniInputRef = useRef(null);
+  const fileInputRef = useRef(null); // 파일 선택 input
+  const activeRoomRef = useRef(null);
+  const [uploading, setUploading] = useState(false); // 파일 업로드 중 여부
 
-  const { sendMessage, markRead } = useDmSocket({
-    onReceive: (msg) => {
-      // 현재 열린 방이면 메시지 추가, 아니면 unread 카운트 증가
-      setRooms((prev) => prev.map((r) =>
-        r.id === msg.room_id
-          ? { ...r, last_message: msg, unread_count: activeRoom?.id === msg.room_id ? 0 : r.unread_count + 1 }
-          : r
-      ));
-      if (activeRoom?.id === msg.room_id) {
-        setMessages((prev) => [...prev, msg]);
-      }
-    },
-    onSent: (msg) => {
-      // 낙관적 UI의 임시 메시지를 서버 저장 완료 메시지로 교체
-      setMessages((prev) => {
-        const idx = [...prev].reverse().findIndex((m) => m._pending);
-        if (idx === -1) return [...prev, msg];
-        const realIdx = prev.length - 1 - idx;
-        const next = [...prev];
-        next[realIdx] = msg;
-        return next;
-      });
-      setRooms((prev) => prev.map((r) =>
-        r.id === msg.room_id ? { ...r, last_message: msg } : r
-      ));
-    },
-  });
+  // ── 소켓 핸들러 ──
+  const handleSocketReceive = useCallback((msg) => {
+    const currentRoom = activeRoomRef.current;
+    if (currentRoom?.id === msg.room_id) {
+      setMessages((prev) => [...prev, msg]);
+    } else {
+      api.get('/dm/rooms').then(({ data }) => setRooms(data)).catch(() => {});
+    }
+  }, []);
+
+  const handleSocketSent = useCallback((msg) => {
+    setMessages((prev) => {
+      const idx = [...prev].reverse().findIndex((m) => m._pending);
+      if (idx === -1) return [...prev, msg];
+      const realIdx = prev.length - 1 - idx;
+      const next = [...prev];
+      next[realIdx] = msg;
+      return next;
+    });
+    setRooms((prev) => prev.map((r) =>
+      r.id === msg.room_id ? { ...r, last_message: msg } : r
+    ));
+  }, []);
+
+  const handleReadAck = useCallback((room_id) => {
+    setMessages((prev) => prev.map((m) =>
+      m.room_id === room_id ? { ...m, status: 'read' } : m
+    ));
+  }, []);
+
+  // isOpen이 false가 되면 핸들러 즉시 해제 → hasNewDm 빨간 점 동작
+  useEffect(() => {
+    if (isOpen) {
+      registerReceive?.(handleSocketReceive);
+      registerSent?.(handleSocketSent);
+      registerReadAck?.(handleReadAck);
+    } else {
+      registerReceive?.(null);
+      registerSent?.(null);
+      registerReadAck?.(null);
+    }
+  }, [isOpen, handleSocketReceive, handleSocketSent, handleReadAck]);
 
   const fetchRooms = useCallback(async () => {
     setLoadingRooms(true);
@@ -88,20 +113,19 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId }) {
     if (isOpen) fetchRooms();
   }, [isOpen]);
 
-  // initialPartnerId가 있으면 패널 열자마자 방 생성 후 바로 채팅창 진입
   useEffect(() => {
     if (!isOpen || !initialPartnerId) return;
     setDirectLoading(true);
     setActiveRoom(null);
+    activeRoomRef.current = null;
     setMessages([]);
     (async () => {
       try {
         const { data: room } = await api.post('/dm/rooms', { partner_id: initialPartnerId });
-        const myId = window.__myUserId;
-        const partner = room.user1_id === myId ? room.user2 : room.user1;
+        const partner = room.user1_id === myUserId ? room.user2 : room.user1;
         const roomWithPartner = { ...room, partner };
-        // openRoom 내부에서 메시지 로드 + markRead 처리
         setActiveRoom(roomWithPartner);
+        activeRoomRef.current = roomWithPartner;
         const { data: msgs } = await api.get(`/dm/rooms/${room.id}/messages`);
         setMessages(msgs);
         markRead(room.id);
@@ -115,6 +139,7 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId }) {
 
   const openRoom = useCallback(async (room) => {
     setActiveRoom(room);
+    activeRoomRef.current = room;
     setMessages([]);
     setLoadingMsgs(true);
     inputRef.current?.focus();
@@ -130,7 +155,6 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId }) {
     }
   }, [markRead]);
 
-  // 새 메시지 올 때 스크롤 맨 아래로
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -141,24 +165,89 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId }) {
       _pending: true,
       id: `p_${Date.now()}`,
       room_id: activeRoom.id,
-      sender_id: window.__myUserId,
+      sender_id: myUserId,
       content: input.trim(),
       created_at: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, pending]);
     sendMessage(activeRoom.id, input.trim());
     setInput('');
-    inputRef.current?.focus();
+    // 최소화 상태면 miniInputRef, 아니면 일반 inputRef에 포커스
+    (minimized ? miniInputRef : inputRef).current?.focus();
+  };
+
+  // 파일 선택 후 업로드 → 소켓으로 전송
+  const handleFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !activeRoom) return;
+    e.target.value = ''; // 같은 파일 재선택 허용
+
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const { data } = await api.post('/dm/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
+      // 낙관적 UI — 서버 확인 전 먼저 표시
+      const pending = {
+        _pending: true,
+        id: `p_${Date.now()}`,
+        room_id: activeRoom.id,
+        sender_id: myUserId,
+        content: null,
+        file_url: data.file_url,
+        file_type: data.file_type,
+        original_name: data.original_name,
+        created_at: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, pending]);
+
+      // 소켓으로 파일 메시지 전송 (sendMessage 확장 — file_url, file_type 포함)
+      sendMessage(activeRoom.id, '', data.file_url, data.file_type);
+    } catch {
+      alert('파일 업로드에 실패했습니다.');
+    } finally {
+      setUploading(false);
+    }
   };
 
   const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
+    }
+  };
+
+  const handleKeyUp = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       handleSend();
     }
   };
 
-  // 날짜 구분선 삽입을 위해 메시지 사이에 날짜 레이블 추가
+  // ── 드래그 ──
+  const onMouseDown = (e) => {
+    if (minimized) return;
+    dragging.current = true;
+    const rect = panelRef.current.getBoundingClientRect();
+    dragOffset.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    e.preventDefault();
+  };
+
+  useEffect(() => {
+    const onMouseMove = (e) => {
+      if (!dragging.current) return;
+      setPos({ x: e.clientX - dragOffset.current.x, y: e.clientY - dragOffset.current.y });
+    };
+    const onMouseUp = () => { dragging.current = false; };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, []);
+
   const messagesWithDividers = messages.reduce((acc, msg, i) => {
     const prev = messages[i - 1];
     const currDay = new Date(msg.created_at).toDateString();
@@ -170,25 +259,136 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId }) {
     return acc;
   }, []);
 
-  // 검색 필터
   const filteredRooms = rooms.filter((r) =>
     r.partner.nickname.toLowerCase().includes(search.toLowerCase())
   );
 
   if (!isOpen) return null;
 
-  return (
-    <div style={s.overlay} onClick={onClose}>
-      <div style={{ ...s.container, width: directMode ? 520 : 780 }} onClick={(e) => e.stopPropagation()}>
+  // 패널 위치 스타일
+  const posStyle = pos
+    ? { position: 'fixed', left: pos.x, top: pos.y, transform: 'none' }
+    : { position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -44%)' };
 
-        {/* ── 왼쪽: 채팅 방 목록 — 직접 DM 진입 시 숨김 ── */}
+  // ── 최소화 상태 — 왼쪽 하단 작은 채팅창 ──
+  if (minimized) {
+    return (
+      <div style={s.miniPanel}>
+        {/* 헤더 — 닉네임 클릭 시 방 목록 드롭다운 */}
+        <div style={s.miniHeader}>
+          {activeRoom && <img src={activeRoom.partner.avatar_url || '/default-avatar.png'} alt="" style={s.miniAvatar} />}
+          <button
+            style={s.miniTitleBtn}
+            onClick={() => setMiniDropdown((v) => !v)}
+            title="대화 상대 변경"
+          >
+            {activeRoom ? activeRoom.partner.nickname : '메시지'} {miniDropdown ? '▲' : '▼'}
+          </button>
+          <button style={s.miniBtn} onClick={() => setMinimized(false)} title="원래 크기로">⤢</button>
+          <button style={s.miniBtn} onClick={onClose} title="닫기">✕</button>
+        </div>
+
+        {/* 드롭다운 방 목록 */}
+        {miniDropdown && (
+          <div style={s.miniDropdown}>
+            {rooms.length === 0 && <p style={s.miniDropdownEmpty}>대화가 없습니다</p>}
+            {rooms.map((room) => (
+              <div
+                key={room.id}
+                style={{ ...s.miniDropdownItem, background: activeRoom?.id === room.id ? '#eff6ff' : '#fff' }}
+                onClick={() => { openRoom(room); setMiniDropdown(false); }}
+              >
+                <img src={room.partner.avatar_url || '/default-avatar.png'} alt="" style={s.miniDropdownAvatar} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={s.miniDropdownName}>{room.partner.nickname}</div>
+                  <div style={s.miniDropdownMsg}>{room.last_message?.content ?? ''}</div>
+                </div>
+                {room.unread_count > 0 && <span style={s.badge}>{room.unread_count}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* 메시지 목록 (작게) */}
+        <div style={s.miniMsgList}>
+          {!activeRoom ? (
+            <p style={{ color: '#9ca3af', fontSize: '0.78rem', textAlign: 'center', marginTop: 16 }}>
+              대화를 선택해주세요
+            </p>
+          ) : messages.slice(-20).map((item) => {
+            if (item._divider) return null;
+            const isMine = item.sender_id === myUserId;
+            return (
+              <div key={item.id} style={{ ...s.miniMsgRow, justifyContent: isMine ? 'flex-end' : 'flex-start' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: isMine ? 'flex-end' : 'flex-start' }}>
+                  <div style={isMine ? s.miniBubbleMine : s.miniBubbleOther}>
+                    {item.file_url && item.file_type === 'image' && (
+                      <img
+                        src={`http://localhost:4000${item.file_url}`}
+                        alt="첨부 이미지"
+                        style={{ maxWidth: 160, maxHeight: 160, borderRadius: 6, display: 'block', cursor: 'pointer' }}
+                        onClick={() => window.open(`http://localhost:4000${item.file_url}`, '_blank')}
+                      />
+                    )}
+                    {item.file_url && item.file_type === 'file' && (
+                      <a
+                        href={`http://localhost:4000${item.file_url}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ color: isMine ? '#fff' : '#2563eb', fontSize: '0.72rem', wordBreak: 'break-all' }}
+                      >
+                        📄 {item.original_name || '첨부파일'}
+                      </a>
+                    )}
+                    {item.content}
+                  </div>
+                  {/* 내가 보낸 메시지에만 읽음 표시 */}
+                  {isMine && (
+                    <span style={{ fontSize: '0.62rem', color: item.status === 'read' ? '#3b82f6' : '#9ca3af', marginTop: 1 }}>
+                      {item.status === 'read' ? '읽음' : '✓'}
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+          <div ref={bottomRef} />
+        </div>
+
+        {/* 입력창 — activeRoom 없으면 비활성화 */}
+        <div style={s.miniInputRow}>
+          <input
+            ref={miniInputRef}
+            style={{ ...s.miniInput, opacity: activeRoom ? 1 : 0.4 }}
+            placeholder={activeRoom ? `${activeRoom.partner.nickname}에게 메시지...` : '대화를 먼저 선택하세요'}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onKeyUp={handleKeyUp}
+            disabled={!activeRoom}
+          />
+          <button
+            style={{ ...s.sendBtn, width: 30, height: 30, fontSize: '0.8rem', opacity: input.trim() && activeRoom ? 1 : 0.4 }}
+            onClick={handleSend}
+            disabled={!input.trim() || !activeRoom}
+          ><img src="/paperplane-svgrepo-com.svg" alt="전송" style={{ width: 24, height: 24, filter: 'brightness(0) invert(1)' }} /></button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ ...posStyle, zIndex: 1200 }} onClick={(e) => e.stopPropagation()}>
+      <div ref={panelRef} style={{ ...s.container, width: directMode ? 520 : 780 }}>
+
+        {/* ── 왼쪽: 방 목록 ── */}
         <div style={{ ...s.sidebar, display: directMode ? 'none' : 'flex' }}>
-          <div style={s.sidebarHeader}>
+          <div style={{ ...s.sidebarHeader, cursor: 'grab' }} onMouseDown={onMouseDown}>
             <span style={s.sidebarTitle}>채팅</span>
-            <button style={s.iconBtn} title="닫기" onClick={onClose}>✕</button>
+            <button style={s.iconBtn} onClick={() => setMinimized(true)} title="최소화">−</button>
+            <button style={s.iconBtn} onClick={onClose} title="닫기">✕</button>
           </div>
 
-          {/* 사용자 검색 */}
           <div style={s.searchWrap}>
             <span style={s.searchIcon}>🔍</span>
             <input
@@ -199,7 +399,6 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId }) {
             />
           </div>
 
-          {/* 방 목록 */}
           <div style={s.roomList}>
             {loadingRooms && <p style={s.hint}>불러오는 중...</p>}
             {!loadingRooms && filteredRooms.length === 0 && (
@@ -215,7 +414,6 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId }) {
                 >
                   <div style={s.avatarWrap}>
                     <img src={room.partner.avatar_url || '/default-avatar.png'} alt="" style={s.roomAvatar} />
-                    {/* 온라인 여부 표시 (추후 연동) */}
                   </div>
                   <div style={s.roomInfo}>
                     <div style={s.roomTopRow}>
@@ -237,29 +435,30 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId }) {
 
         {/* ── 오른쪽: 채팅창 ── */}
         <div style={s.chatArea}>
+          {/* 채팅창 헤더 — 드래그 가능 */}
+          <div style={{ ...s.chatHeader, cursor: 'grab' }} onMouseDown={onMouseDown}>
+            {activeRoom && (
+              <>
+                <img src={activeRoom.partner.avatar_url || '/default-avatar.png'} alt="" style={s.chatHeaderAvatar} />
+                <div style={s.chatHeaderName}>{activeRoom.partner.nickname}</div>
+              </>
+            )}
+            {!activeRoom && <div style={s.chatHeaderName}>메시지</div>}
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+              <button style={s.iconBtn} onClick={() => setMinimized(true)} title="최소화">−</button>
+              <button style={s.iconBtn} onClick={onClose} title="닫기">✕</button>
+            </div>
+          </div>
+
           {directLoading ? (
-            <div style={s.emptyChat}>
-              <p style={s.emptyChatText}>불러오는 중...</p>
-            </div>
+            <div style={s.emptyChat}><p style={s.emptyChatText}>불러오는 중...</p></div>
           ) : !activeRoom ? (
-            <div style={s.emptyChat}>
-              <p style={s.emptyChatText}>대화를 선택해주세요</p>
-            </div>
+            <div style={s.emptyChat}><p style={s.emptyChatText}>대화를 선택해주세요</p></div>
           ) : (
             <>
-              {/* 채팅창 헤더 */}
-              <div style={s.chatHeader}>
-                <img src={activeRoom.partner.avatar_url || '/default-avatar.png'} alt="" style={s.chatHeaderAvatar} />
-                <div>
-                  <div style={s.chatHeaderName}>{activeRoom.partner.nickname}</div>
-                </div>
-              </div>
-
-              {/* 메시지 목록 */}
               <div style={s.msgList}>
                 {loadingMsgs && <p style={s.hint}>불러오는 중...</p>}
                 {messagesWithDividers.map((item) => {
-                  // 날짜 구분선
                   if (item._divider) {
                     return (
                       <div key={item.key} style={s.dateDivider}>
@@ -269,7 +468,7 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId }) {
                       </div>
                     );
                   }
-                  const isMine = item.sender_id === window.__myUserId;
+                  const isMine = item.sender_id === myUserId;
                   return (
                     <div key={item.id} style={{ ...s.msgRow, justifyContent: isMine ? 'flex-end' : 'flex-start' }}>
                       {!isMine && (
@@ -281,12 +480,35 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId }) {
                       )}
                       <div style={s.msgGroup}>
                         <div style={isMine ? s.bubbleMine : s.bubbleOther}>
+                          {/* 이미지 파일 */}
+                          {item.file_url && item.file_type === 'image' && (
+                            <img
+                              src={`http://localhost:4000${item.file_url}`}
+                              alt="첨부 이미지"
+                              style={{ maxWidth: 220, maxHeight: 220, borderRadius: 8, display: 'block', cursor: 'pointer' }}
+                              onClick={() => window.open(`http://localhost:4000${item.file_url}`, '_blank')}
+                            />
+                          )}
+                          {/* 일반 파일 */}
+                          {item.file_url && item.file_type === 'file' && (
+                            <a
+                              href={`http://localhost:4000${item.file_url}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{ color: isMine ? '#fff' : '#2563eb', fontSize: '0.82rem', wordBreak: 'break-all' }}
+                            >
+                              📄 {item.original_name || '첨부파일'}
+                            </a>
+                          )}
                           {item.content}
                         </div>
                         <span style={{ ...s.msgTime, textAlign: isMine ? 'right' : 'left' }}>
                           {formatTime(item.created_at)}
-                          {/* 전송 완료 체크 표시 */}
-                          {isMine && !item._pending && ' ✓'}
+                          {isMine && !item._pending && (
+                            item.status === 'read'
+                              ? <span style={{ color: '#3b82f6', marginLeft: 3 }}>읽음</span>
+                              : <span style={{ marginLeft: 3 }}>✓</span>
+                          )}
                         </span>
                       </div>
                     </div>
@@ -295,9 +517,21 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId }) {
                 <div ref={bottomRef} />
               </div>
 
-              {/* 입력창 */}
               <div style={s.inputRow}>
-                <button style={s.attachBtn} title="파일 첨부 (준비 중)">📎</button>
+                {/* 숨겨진 파일 input — 클립 버튼 클릭 시 트리거 */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  style={{ display: 'none' }}
+                  accept="image/*,.pdf,.zip,.doc,.docx,.txt"
+                  onChange={handleFileChange}
+                />
+                <button
+                  style={{ ...s.attachBtn, opacity: uploading ? 0.4 : 1 }}
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading || !activeRoom}
+                  title="파일 첨부"
+                >📎</button>
                 <input
                   ref={inputRef}
                   style={s.input}
@@ -305,15 +539,15 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId }) {
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
+                  onKeyUp={handleKeyUp}
                 />
-                <button style={s.emojiBtn} title="이모지 (준비 중)">🙂</button>
-                <button
+<button
                   style={{ ...s.sendBtn, opacity: input.trim() ? 1 : 0.4 }}
                   onClick={handleSend}
                   disabled={!input.trim()}
                 >
-                  ➤
-                </button>
+                  <img src="/paperplane-svgrepo-com.svg" alt="전송" style={{ width: 24, height: 24, filter: 'brightness(0) invert(1)' }} />
+</button>
               </div>
             </>
           )}
@@ -325,52 +559,119 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId }) {
 }
 
 const s = {
-  overlay: {
-    position: 'fixed', inset: 0,
-    zIndex: 1200,
-    background: 'transparent',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-  },
   container: {
-    width: 780,
     height: '78vh',
     background: '#ffffff',
     borderRadius: 16,
     display: 'flex',
     overflow: 'hidden',
     boxShadow: '0 24px 64px rgba(0,0,0,0.35)',
+    userSelect: 'none',
+  },
+  miniPanel: {
+    position: 'fixed',
+    bottom: 24,
+    left: 24,
+    width: 280,
+    height: 360,
+    background: '#fff',
+    borderRadius: 12,
+    boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
+    zIndex: 1200,
+    overflow: 'hidden',
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  miniHeader: {
+    display: 'flex', alignItems: 'center', gap: 8,
+    padding: '8px 10px',
+    background: '#1e3a5f',
+    flexShrink: 0,
+  },
+  miniAvatar: { width: 24, height: 24, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 },
+  miniTitleBtn: {
+    flex: 1, background: 'none', border: 'none',
+    color: 'white', fontWeight: 600, fontSize: '0.82rem',
+    textAlign: 'left', cursor: 'pointer',
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    padding: 0,
+  },
+  miniBtn: { background: 'none', border: 'none', color: 'rgba(255,255,255,0.7)', cursor: 'pointer', fontSize: '0.85rem', padding: '0 2px' },
+  miniDropdown: {
+    position: 'absolute',
+    top: 40, left: 0, right: 0,
+    background: '#fff',
+    borderBottom: '1px solid #e5e7eb',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+    zIndex: 10,
+    maxHeight: 200,
+    overflowY: 'auto',
+  },
+  miniDropdownEmpty: { color: '#9ca3af', fontSize: '0.78rem', textAlign: 'center', padding: '12px 0' },
+  miniDropdownItem: {
+    display: 'flex', alignItems: 'center', gap: 8,
+    padding: '8px 10px', cursor: 'pointer',
+    borderBottom: '1px solid #f3f4f6',
+  },
+  miniDropdownAvatar: { width: 28, height: 28, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 },
+  miniDropdownName: { fontSize: '0.8rem', fontWeight: 600, color: '#111827' },
+  miniDropdownMsg: { fontSize: '0.72rem', color: '#9ca3af', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  miniMsgList: {
+    flex: 1, overflowY: 'auto',
+    padding: '8px 10px',
+    display: 'flex', flexDirection: 'column', gap: 4,
+    background: '#f9fafb',
+  },
+  miniMsgRow: { display: 'flex' },
+  miniBubbleMine: {
+    background: '#3b82f6', color: '#fff',
+    padding: '5px 9px', borderRadius: '12px 12px 2px 12px',
+    fontSize: '0.78rem', lineHeight: 1.4, wordBreak: 'break-word', maxWidth: '80%',
+  },
+  miniBubbleOther: {
+    background: '#fff', color: '#111827',
+    border: '1px solid #e5e7eb',
+    padding: '5px 9px', borderRadius: '12px 12px 12px 2px',
+    fontSize: '0.78rem', lineHeight: 1.4, wordBreak: 'break-word', maxWidth: '80%',
+  },
+  miniInputRow: {
+    display: 'flex', gap: 6,
+    padding: '6px 8px',
+    borderTop: '1px solid #e5e7eb',
+    background: '#fff',
+    flexShrink: 0,
+  },
+  miniInput: {
+    flex: 1, border: '1px solid #e5e7eb', borderRadius: 8,
+    padding: '5px 9px', fontSize: '0.78rem', outline: 'none',
+    background: '#f9fafb', color: '#111827',
   },
 
-  // ── 왼쪽 사이드바 ──
   sidebar: {
     width: 260,
     borderRight: '1px solid #e5e7eb',
-    display: 'flex', flexDirection: 'column',
+    flexDirection: 'column',
     background: '#fff',
     flexShrink: 0,
   },
   sidebarHeader: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '18px 16px 10px',
+    display: 'flex', alignItems: 'center', gap: 6,
+    padding: '14px 14px 10px',
+    borderBottom: '1px solid #f0f0f0',
   },
-  sidebarTitle: {
-    fontSize: '1.1rem', fontWeight: 700, color: '#111827',
-  },
+  sidebarTitle: { flex: 1, fontSize: '1rem', fontWeight: 700, color: '#111827' },
   iconBtn: {
     background: 'none', border: 'none', cursor: 'pointer',
-    color: '#9ca3af', fontSize: '0.95rem', padding: 4,
+    color: '#9ca3af', fontSize: '1rem', padding: '2px 4px',
   },
   searchWrap: {
     display: 'flex', alignItems: 'center', gap: 8,
-    margin: '0 12px 10px',
+    margin: '8px 12px',
     background: '#f3f4f6', borderRadius: 8,
     padding: '6px 10px',
   },
   searchIcon: { fontSize: '0.8rem', color: '#9ca3af' },
-  searchInput: {
-    flex: 1, background: 'none', border: 'none', outline: 'none',
-    fontSize: '0.85rem', color: '#374151',
-  },
+  searchInput: { flex: 1, background: 'none', border: 'none', outline: 'none', fontSize: '0.85rem', color: '#374151' },
   roomList: { flex: 1, overflowY: 'auto' },
   roomItem: {
     display: 'flex', alignItems: 'center', gap: 10,
@@ -384,54 +685,34 @@ const s = {
   roomName: { fontWeight: 600, fontSize: '0.88rem', color: '#111827' },
   roomTime: { fontSize: '0.73rem', color: '#9ca3af', flexShrink: 0 },
   roomBottomRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 },
-  roomLastMsg: {
-    fontSize: '0.78rem', color: '#6b7280',
-    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 140,
-  },
+  roomLastMsg: { fontSize: '0.78rem', color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 140 },
   badge: {
     background: '#3b82f6', color: '#fff', borderRadius: '50%',
     minWidth: 18, height: 18, fontSize: '0.68rem', fontWeight: 700,
-    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-    padding: '0 3px',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: '0 3px',
   },
 
-  // ── 오른쪽 채팅창 ──
-  chatArea: {
-    flex: 1, display: 'flex', flexDirection: 'column', background: '#f9fafb',
-  },
-  emptyChat: {
-    flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-  },
-  emptyChatText: { color: '#9ca3af', fontSize: '0.9rem' },
+  chatArea: { flex: 1, display: 'flex', flexDirection: 'column', background: '#f9fafb' },
   chatHeader: {
     display: 'flex', alignItems: 'center', gap: 10,
-    padding: '14px 20px',
+    padding: '12px 16px',
     background: '#fff',
     borderBottom: '1px solid #e5e7eb',
     flexShrink: 0,
   },
-  chatHeaderAvatar: { width: 36, height: 36, borderRadius: '50%', objectFit: 'cover' },
+  chatHeaderAvatar: { width: 32, height: 32, borderRadius: '50%', objectFit: 'cover' },
   chatHeaderName: { fontWeight: 700, fontSize: '0.95rem', color: '#111827' },
-  chatHeaderStatus: { fontSize: '0.75rem', color: '#22c55e', marginTop: 1 },
+  emptyChat: { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  emptyChatText: { color: '#9ca3af', fontSize: '0.9rem' },
   msgList: {
     flex: 1, overflowY: 'auto',
     padding: '16px 20px',
     display: 'flex', flexDirection: 'column', gap: 4,
   },
-  dateDivider: {
-    display: 'flex', alignItems: 'center', gap: 10,
-    margin: '12px 0',
-  },
-  dateDividerLine: {
-    flex: 1, height: 1, background: '#e5e7eb',
-  },
-  dateDividerLabel: {
-    fontSize: '0.75rem', color: '#9ca3af', whiteSpace: 'nowrap',
-  },
-  msgRow: {
-    display: 'flex', alignItems: 'flex-end', gap: 8,
-    marginBottom: 2,
-  },
+  dateDivider: { display: 'flex', alignItems: 'center', gap: 10, margin: '12px 0' },
+  dateDividerLine: { flex: 1, height: 1, background: '#e5e7eb' },
+  dateDividerLabel: { fontSize: '0.75rem', color: '#9ca3af', whiteSpace: 'nowrap' },
+  msgRow: { display: 'flex', alignItems: 'flex-end', gap: 8, marginBottom: 2 },
   msgAvatar: { width: 30, height: 30, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 },
   msgGroup: { display: 'flex', flexDirection: 'column', maxWidth: '65%' },
   bubbleMine: {
@@ -445,9 +726,7 @@ const s = {
     padding: '9px 13px', borderRadius: '16px 16px 16px 4px',
     fontSize: '0.88rem', lineHeight: 1.45, wordBreak: 'break-word',
   },
-  msgTime: {
-    fontSize: '0.7rem', color: '#9ca3af', marginTop: 3,
-  },
+  msgTime: { fontSize: '0.7rem', color: '#9ca3af', marginTop: 3 },
   hint: { color: '#9ca3af', textAlign: 'center', fontSize: '0.85rem', marginTop: 32 },
   inputRow: {
     display: 'flex', alignItems: 'center', gap: 8,
@@ -456,24 +735,17 @@ const s = {
     borderTop: '1px solid #e5e7eb',
     flexShrink: 0,
   },
-  attachBtn: {
-    background: 'none', border: 'none', cursor: 'pointer',
-    fontSize: '1.1rem', padding: '0 2px', color: '#9ca3af',
-  },
+  attachBtn: { background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.1rem', padding: '0 2px', color: '#9ca3af' },
   input: {
     flex: 1, border: '1px solid #e5e7eb', borderRadius: 10,
     padding: '9px 13px', fontSize: '0.88rem', outline: 'none',
     background: '#f9fafb', color: '#111827',
   },
-  emojiBtn: {
-    background: 'none', border: 'none', cursor: 'pointer',
-    fontSize: '1.1rem', padding: '0 2px', color: '#9ca3af',
-  },
+  emojiBtn: { background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.1rem', padding: '0 2px', color: '#9ca3af' },
   sendBtn: {
     width: 38, height: 38,
     background: '#3b82f6', color: '#fff', border: 'none',
     borderRadius: '50%', fontSize: '1rem',
-    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-    flexShrink: 0,
+    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
 };

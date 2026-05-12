@@ -1,51 +1,73 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { io } from 'socket.io-client';
 
-// Socket.io 연결을 관리하는 훅
-// onReceive: 상대방 메시지 수신 콜백 ({ room_id, ...message })
-export function useDmSocket({ onReceive, onSent }) {
+export function useDmSocket({ onReceive, onSent, onReadAck }) {
   const socketRef = useRef(null);
 
+  const onReceiveRef = useRef(onReceive);
+  const onSentRef = useRef(onSent);
+  const onReadAckRef = useRef(onReadAck);
+  useEffect(() => { onReceiveRef.current = onReceive; }, [onReceive]);
+  useEffect(() => { onSentRef.current = onSent; }, [onSent]);
+  useEffect(() => { onReadAckRef.current = onReadAck; }, [onReadAck]);
+
   useEffect(() => {
-    const token = window.__accessToken;
-    if (!token) return;
+    // accessToken이 세팅될 때까지 폴링 후 연결
+    let cancelled = false;
 
-    const socket = io('http://localhost:4000', {
-      auth: { token },
-    });
+    const connect = (token) => {
+      const socket = io('http://localhost:4000', {
+        auth: { token },
+      });
 
-    socket.on('connect', () => {
-      console.log('[DM Socket] connected');
-    });
+      socket.on('connect', () => {
+        console.log('[DM Socket] connected');
+      });
 
-    // 상대방이 보낸 메시지 수신
-    socket.on('dm:receive', (msg) => {
-      onReceive?.(msg);
-    });
+      socket.on('dm:receive', (msg) => {
+        onReceiveRef.current?.(msg);
+      });
 
-    // 내가 보낸 메시지 서버 저장 완료 확인
-    socket.on('dm:sent', (msg) => {
-      onSent?.(msg);
-    });
+      socket.on('dm:sent', (msg) => {
+        onSentRef.current?.(msg);
+      });
 
-    socket.on('disconnect', () => {
-      console.log('[DM Socket] disconnected');
-    });
+      // 상대방이 메시지를 읽었을 때 수신
+      socket.on('dm:read_ack', ({ room_id }) => {
+        onReadAckRef.current?.(room_id);
+      });
 
-    socketRef.current = socket;
+      socket.on('disconnect', () => {
+        console.log('[DM Socket] disconnected');
+      });
+
+      socketRef.current = socket;
+    };
+
+    const tryConnect = () => {
+      if (cancelled) return;
+      const token = window.__accessToken;
+      if (token) {
+        connect(token);
+      } else {
+        // 토큰이 아직 없으면 200ms 후 재시도
+        setTimeout(tryConnect, 200);
+      }
+    };
+
+    tryConnect();
 
     return () => {
-      socket.disconnect();
+      cancelled = true;
+      socketRef.current?.disconnect();
       socketRef.current = null;
     };
   }, []);
 
-  // 메시지 전송
-  const sendMessage = useCallback((room_id, content) => {
-    socketRef.current?.emit('dm:send', { room_id, content });
+  const sendMessage = useCallback((room_id, content, file_url, file_type) => {
+    socketRef.current?.emit('dm:send', { room_id, content, file_url, file_type });
   }, []);
 
-  // 읽음 처리
   const markRead = useCallback((room_id) => {
     socketRef.current?.emit('dm:read', { room_id });
   }, []);

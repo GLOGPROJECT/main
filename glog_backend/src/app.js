@@ -55,8 +55,9 @@ io.on('connection', (socket) => {
 
   // DM 메시지 전송 이벤트
   // payload: { room_id, content }
-  socket.on('dm:send', async ({ room_id, content }) => {
-    if (!content?.trim()) return;
+  socket.on('dm:send', async ({ room_id, content, file_url, file_type }) => {
+    // 텍스트와 파일 둘 다 없으면 무시
+    if (!content?.trim() && !file_url) return;
 
     try {
       // 해당 DM 방에 본인이 참여자인지 검증
@@ -70,7 +71,7 @@ io.on('connection', (socket) => {
 
       // DB에 메시지 저장
       const message = await prisma.dmMessage.create({
-        data: { room_id, sender_id: userId, content: content.trim() },
+        data: { room_id, sender_id: userId, content: content?.trim() || null, file_url: file_url || null, file_type: file_type || null },
         include: { sender: { select: { user_id: true, nickname: true, avatar_url: true } } },
       });
 
@@ -80,6 +81,8 @@ io.on('connection', (socket) => {
         sender_id: userId,
         sender: message.sender,
         content: message.content,
+        file_url: message.file_url,
+        file_type: message.file_type,
         status: message.status,
         created_at: message.created_at,
       };
@@ -104,6 +107,13 @@ io.on('connection', (socket) => {
         where: { room_id, sender_id: { not: userId }, status: { not: 'read' } },
         data: { status: 'read' },
       });
+
+      // 원래 메시지를 보낸 상대방에게 읽음 처리 알림
+      const room = await prisma.dmRoom.findUnique({ where: { id: room_id } });
+      if (room) {
+        const senderId = room.user1_id === userId ? room.user2_id : room.user1_id;
+        io.to(`user:${senderId}`).emit('dm:read_ack', { room_id });
+      }
     } catch (err) {
       console.error('[dm:read error]', err.message);
     }

@@ -31,6 +31,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "./auth/hooks/useAuth";
 import api from "./api/axios";
 import DmPanel from "./dm/DmPanel";
+import { useDmSocket } from "./dm/useDmSocket";
 import * as THREE from "three";
 
 // Html 라벨을 body에 붙여 canvas 상위 overflow에 잘리지 않게 함
@@ -242,12 +243,33 @@ export default function EarthCommunity() {
   const [selectedUser, setSelectedUser] = useState(null);
   // 랜딩 페이지와 동일한 상단 메뉴 active 상태
   const [activeNav, setActiveNav] = useState(null);
-  // 새 DM·알림 여부 - 읽으면 false로 변경 (데모: 각각 1개씩 온 상태)
-  const [hasNewDm, setHasNewDm] = useState(true);
-  const [hasNewNotif, setHasNewNotif] = useState(true);
-  // DM 패널 상태 — dmPartnerId: 특정 유저와 바로 대화 시작 시 사용
+  const [hasNewDm, setHasNewDm] = useState(false);
+  const [hasNewNotif, setHasNewNotif] = useState(false);
   const [dmOpen, setDmOpen] = useState(false);
   const [dmPartnerId, setDmPartnerId] = useState(null);
+
+  // DmPanel에 등록할 수신/전송 핸들러 ref — 패널이 열릴 때 등록됨
+  const dmReceiveHandlerRef = useRef(null);
+  const dmSentHandlerRef = useRef(null);
+  const dmReadAckHandlerRef = useRef(null);
+
+  // 소켓은 EarthCommunity에서 항상 연결 유지 — 패널 닫혀있어도 새 메시지 감지
+  const { sendMessage, markRead } = useDmSocket({
+    onReceive: (msg) => {
+      if (dmReceiveHandlerRef.current) {
+        dmReceiveHandlerRef.current(msg);
+      } else {
+        // 패널이 닫혀있으면 빨간 점 표시
+        setHasNewDm(true);
+      }
+    },
+    onSent: (msg) => {
+      dmSentHandlerRef.current?.(msg);
+    },
+    onReadAck: (room_id) => {
+      dmReadAckHandlerRef.current?.(room_id);
+    },
+  });
   const earthRef = useRef();
   const dragRef = useRef({ dragging: false, lastX: 0, lastY: 0, deltaX: 0, deltaY: 0, pausedUntil: 0 });
   const zoomRef = useRef(3); // 카메라 Z 거리 (기본 3, 범위 1.5~6)
@@ -255,6 +277,8 @@ export default function EarthCommunity() {
   // 프로필 페이지 이동을 위한 navigate, 로그인 유저 정보
   const navigate = useNavigate();
   const { user: me, updateUser } = useAuth();
+  // 소켓/DmPanel에서 내 userId 식별용 — GlobalTopNav가 없는 globe 페이지에서 직접 세팅
+  if (me) window.__myUserId = me.user_id;
 
   // 지구본에 표시할 실제 유저 목록 — API에서 불러옴
   const [globeUsers, setGlobeUsers] = useState([]);
@@ -449,6 +473,11 @@ export default function EarthCommunity() {
           isOpen={dmOpen}
           onClose={() => { setDmOpen(false); setDmPartnerId(null); }}
           initialPartnerId={dmPartnerId}
+          sendMessage={sendMessage}
+          markRead={markRead}
+          registerReceive={(fn) => { dmReceiveHandlerRef.current = fn; }}
+          registerSent={(fn) => { dmSentHandlerRef.current = fn; }}
+          registerReadAck={(fn) => { dmReadAckHandlerRef.current = fn; }}
         />
       )}
     </div>
