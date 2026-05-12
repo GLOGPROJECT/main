@@ -55,7 +55,7 @@ export default function App() {
               <Route
                 path="/globe"
                 element={
-                  // <ProtectedRoute>
+                  // <ProtectedRoute> //로그인없이 테스트
                     <EarthCommunity />
                   // </ProtectedRoute>
                 }
