@@ -55,9 +55,9 @@ export default function App() {
               <Route
                 path="/globe"
                 element={
-                  <ProtectedRoute>
+                  // <ProtectedRoute>
                     <EarthCommunity />
-                  </ProtectedRoute>
+                  // </ProtectedRoute>
                 }
               />
             </Routes>

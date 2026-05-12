@@ -110,18 +110,34 @@ useGLTF.preload("/models/earth/scene.gltf");
 // ──────────────────────────────────────────────────────────────────
 // 3. 유저 마커 (호버 시 살짝 커지고 이름 툴팁 표시)
 // ──────────────────────────────────────────────────────────────────
+const BASE_DISTANCE = 3.35;
+const MIN_SCALE = 0.6;
+const MAX_SCALE = 2.0;
+
 function UserMarker({ position, user, onClick }) {
   const ref = useRef();
+  const groupRef = useRef();
   const [hovered, setHovered] = useState(false);
+  const { camera } = useThree();
+  const worldPos = useMemo(() => new THREE.Vector3(), []);
 
-  useFrame((_, delta) => {
-    if (!ref.current) return;
-    const target = hovered ? 1.4 : 1.0;
+  useFrame(() => {
+    if (!ref.current || !groupRef.current) return;
+
+    // 마커의 실제 월드 좌표 계산 (지구 회전 반영)
+    groupRef.current.getWorldPosition(worldPos);
+
+    // 카메라 거리 기반 동적 스케일
+    const dist = camera.position.distanceTo(worldPos);
+    const dynamicScale = THREE.MathUtils.clamp(BASE_DISTANCE / dist, MIN_SCALE, MAX_SCALE);
+
+    // 호버 배율 × 거리 배율
+    const target = (hovered ? 1.4 : 1.0) * dynamicScale;
     ref.current.scale.lerp(new THREE.Vector3(target, target, target), 0.15);
   });
 
   return (
-    <group position={position}>
+    <group ref={groupRef} position={position}>
       <mesh
         ref={ref}
         onClick={(e) => {
