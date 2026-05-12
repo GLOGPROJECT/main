@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import api from '../../api/axios';
+import GlobalTopNav from '../../components/GlobalTopNav';
 
 // 백엔드 서버 주소 - GitHub OAuth 로그인 요청을 이 주소로 보냄
 const BACKEND_URL = 'http://localhost:4000';
@@ -9,8 +10,6 @@ const BACKEND_URL = 'http://localhost:4000';
 // 전역 CSS:
 // - earth-spin: 지구본 무한 회전 (20초 1바퀴)
 // - twinkle: 별 반짝임 애니메이션
-// - nav-item: 기본 메뉴 버튼 스타일 (완전 흰색, 굵게)
-// - nav-item.active: 클릭된 메뉴 (파란 밑줄 + 흰색 강조)
 // - cta-btn: 하얀 배경 시작하기 버튼
 const globalStyles = `
   @keyframes spin {
@@ -23,25 +22,6 @@ const globalStyles = `
   }
   .earth-spin {
     animation: spin 20s linear infinite;
-  }
-  .nav-item {
-    color: #ffffff;
-    cursor: pointer;
-    padding: 8px 0;
-    border: none;
-    border-bottom: 2px solid transparent;
-    background: none;
-    font-size: 1.5rem;
-    font-weight: 700;
-    font-family: inherit;
-    transition: color 0.2s, border-color 0.2s;
-  }
-  .nav-item:hover {
-    color: rgba(255,255,255,0.8);
-  }
-  .nav-item.active {
-    color: #4e9af1;
-    border-bottom: 2px solid #4e9af1;
   }
   .cta-btn {
     background: white;
@@ -64,9 +44,6 @@ export default function Landing() {
   // user는 로그인된 유저 정보, 프로필 이동 시 user_id 사용
   const { user: me, loading } = useAuth();
   const navigate = useNavigate();
-
-  // 현재 선택된 메뉴 아이템 - 클릭 시 시각적 효과만, 실제 이동 없음
-  const [activeNav, setActiveNav] = useState(null);
 
   // 하단 통계 + 오늘 상위 커미터 2명 상태 - API에서 실제 값을 받아와 표시
   const [stats, setStats] = useState({
@@ -122,10 +99,6 @@ export default function Landing() {
   // 로딩 중에는 배경색만 채운 빈 화면 (깜빡임 방지)
   if (loading) return <div style={{ background: '#0f1c36', height: '100vh' }} />;
 
-
-  // 상단 네비게이션 메뉴 목록 - 로그인 전이라 클릭해도 이동 없음
-  const navItems = ['프로필', '피드', '트로피', '상점', '로그아웃'];
-
   return (
     <>
       <style>{globalStyles}</style>
@@ -164,41 +137,9 @@ export default function Landing() {
           />
         ))}
 
-        {/* ── 네비게이션 바 ──
-            왼쪽: GLog 로고 (크기 2.1rem = 1.4rem × 1.5배, 굵게)
-            오른쪽: 메뉴 버튼들 (1.5rem, 굵게, 완전 흰색)
-            클릭 시 activeNav 상태만 변경 - 실제 페이지 이동 없음 */}
-        <nav style={{
-          position: 'relative',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          padding: '20px 60px',
-          borderBottom: '1px solid rgba(255,255,255,0.1)',
-          zIndex: 1,
-        }}>
-          {/* 로고 - 기존 1.4rem의 1.5배인 2.1rem */}
-          <div style={{ fontSize: '2.1rem', fontWeight: 'bold', color: '#ffffff' }}>GLog 🌍</div>
-          <div style={{ display: 'flex', gap: '40px' }}>
-            {navItems.map(item => (
-              <button
-                key={item}
-                className={`nav-item${activeNav === item ? ' active' : ''}`}
-                onClick={() => {
-                  // 로그인 상태에서 프로필 클릭 시 본인 프로필 페이지로 이동
-                  if (item === '프로필' && me) {
-                    navigate(`/profile/${me.user_id}`);
-                  } else {
-                    // 로그인 전이거나 다른 메뉴는 시각적 선택 효과만
-                    setActiveNav(item);
-                  }
-                }}
-              >
-                {item}
-              </button>
-            ))}
-          </div>
-        </nav>
+        <div style={{ position: 'relative', zIndex: 1 }}>
+          <GlobalTopNav />
+        </div>
 
         {/* ── 히어로 섹션 ──
             왼쪽: 뱃지 + 타이틀 + 서브타이틀 + CTA 버튼

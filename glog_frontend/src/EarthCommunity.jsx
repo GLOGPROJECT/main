@@ -28,6 +28,9 @@ import { useAuth } from "./auth/hooks/useAuth";
 import api from "./api/axios";
 import * as THREE from "three";
 
+// Html 라벨을 body에 붙여 canvas 상위 overflow에 잘리지 않게 함
+const htmlLabelPortal = typeof document !== "undefined" ? { current: document.body } : { current: null };
+
 // ──────────────────────────────────────────────────────────────────
 // 1. 데모용 유저 데이터 (위도 / 경도 기반)
 // ──────────────────────────────────────────────────────────────────
@@ -147,9 +150,14 @@ function UserMarker({ position, user, onClick }) {
         />
       </mesh>
 
-      {/* 호버 시 이름 라벨 */}
+      {/* 호버 시 이름 라벨 — body 포털 + 핀 아래쪽 배치로 상단 잘림 방지 */}
       {hovered && (
-        <Html center distanceFactor={8} style={{ pointerEvents: "none" }}>
+        <Html
+          center
+          distanceFactor={8}
+          portal={htmlLabelPortal}
+          style={{ pointerEvents: "none", zIndex: 10000 }}
+        >
           <div style={labelStyle}>{user.name}</div>
         </Html>
       )}
@@ -253,13 +261,13 @@ export default function EarthCommunity() {
 
   return (
     <div style={wrapperStyle}>
-      <div
-        style={canvasWrapStyle}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onClick={handleCanvasClick}
-      >
-        <Canvas camera={{ position: [0, 0, 3], fov: 45 }}>
+      <div style={canvasHostStyle} onClick={handleCanvasClick}>
+        <div
+          style={canvasWrapStyle}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+        >
+        <Canvas camera={{ position: [0, 0, 3.35], fov: 45 }}>
           <ambientLight intensity={0.6} />
           <directionalLight position={[5, 3, 5]} intensity={1.1} />
           <Suspense fallback={null}>
@@ -283,6 +291,7 @@ export default function EarthCommunity() {
               필요하면 enableRotate=false로 줌만 살리는 식으로 활용 가능. */}
           {/* <OrbitControls enableRotate={false} enablePan={false} /> */}
         </Canvas>
+        </div>
       </div>
 
       {/* 랜딩 페이지와 동일한 구조의 상단 네비게이션 바
@@ -292,6 +301,9 @@ export default function EarthCommunity() {
       <nav style={{
         ...earthNavbarStyle,
         opacity: selectedUser ? 0 : 1,
+        // 패널 열릴 때 background/backdropFilter도 제거 - opacity:0만으론 렌더링 아티팩트 발생
+        background: selectedUser ? 'transparent' : 'rgba(11, 16, 38, 0.75)',
+        backdropFilter: selectedUser ? 'none' : 'blur(8px)',
         pointerEvents: selectedUser ? 'none' : 'auto',
         transition: 'opacity 0.3s ease',
       }}>
@@ -367,10 +379,40 @@ const STATUS_CONFIG = {
 
 // 더미 데이터 (추후 API 연결 시 교체)
 const DUMMY_POSTS = [
-  { id: 1, content: '오늘 드디어 백엔드 API 연결 완료! 🎉 CORS 3시간 잡았다...', likes: 24, comments: 3, timeAgo: '2시간 전', liked: false },
+  { id: 1, content: '오늘 드디어 백엔드 API 연결 완료! 🎉 CORS 3시간 잡았다...', likes: 24, comments: 3, timeAgo: '2시간 전' },
+  { id: 2, content: 'React Query로 서버 상태 관리 리팩토링 완료. 코드가 훨씬 깔끔해졌다!', likes: 18, comments: 5, timeAgo: '5시간 전' },
+  { id: 3, content: 'Three.js 지구본 구현 중 🌍 위도/경도 좌표 변환이 생각보다 복잡하네', likes: 31, comments: 8, timeAgo: '1일 전' },
+  { id: 4, content: 'JWT 인증 흐름 완성! Access + Refresh Token으로 보안 강화 🔐', likes: 12, comments: 2, timeAgo: '2일 전' },
+  { id: 5, content: 'Prisma ORM 처음 써봤는데 타입 자동완성이 진짜 편하다 ✨', likes: 9, comments: 1, timeAgo: '3일 전' },
 ];
+
+// 트로피 등급별 설정 - SVG 파일 경로 사용
+const TROPHY_GRADE = {
+  gold:   { src: '/goldtrophy.svg',   color: '#f59e0b', label: '금' },
+  silver: { src: '/silvertrophy.svg', color: '#9ca3af', label: '은' },
+  bronze: { src: '/bronzetrophy.svg', color: '#92400e', label: '동' },
+};
+
+// 프로젝트(트로피) 더미 - image: null 일 때 썸네일 플레이스홀더 사용
 const DUMMY_TROPHIES = [
-  { id: 1, name: '첫 커밋', desc: '처음으로 커밋을 달성했어요!', grade: 'gold', date: '2024-01-15' },
+  {
+    id: 1, image: null, title: 'DevGlobe',
+    desc: '개발자들을 위한 SNS 플랫폼. 프로젝트 공유, 피드, 상점 등 다양한 기능을 제공해요.',
+    techStacks: ['React', 'TypeScript', 'Node.js'], dateRange: '2024.01.10 ~ 2024.03.20',
+    timeAgo: '2시간 전', grade: 'gold', likes: 58, comments: 12,
+  },
+  {
+    id: 2, image: null, title: 'FocusMind',
+    desc: '집중력 향상을 위한 타이머 & 백색소음 앱. 포모도로 타이머와 통계 기능을 제공해요.',
+    techStacks: ['React Native', 'TypeScript'], dateRange: '2024.02.05 ~ 2024.03.15',
+    timeAgo: '5시간 전', grade: 'silver', likes: 32, comments: 7,
+  },
+  {
+    id: 3, image: null, title: 'DataFlow',
+    desc: '데이터 시각화 대시보드 서비스. 실시간 데이터 분석과 다양한 차트를 지원해요.',
+    techStacks: ['Next.js', 'TypeScript', 'Tailwind CSS'], dateRange: '2024.01.20 ~ 2024.03.01',
+    timeAgo: '1일 전', grade: 'bronze', likes: 21, comments: 4,
+  },
 ];
 
 // hasNewDm, hasNewNotif: 새 메시지·알림 여부 → true면 아이콘 왼쪽 하단에 빨간 점 표시
@@ -384,11 +426,14 @@ function UserPanel({ user, onClose, onViewProfile, onStatusChange, hasNewDm = fa
   const [activeTab, setActiveTab] = useState('posts');
   // 좋아요 누른 글 ID 집합 - 클릭 시 토글
   const [likedSet, setLikedSet] = useState(new Set());
+  // 내 글/트로피 카드 펼치기 모드 (true: 확장, false: 기본)
+  const [isExpanded, setIsExpanded] = useState(false);
 
   useEffect(() => {
     if (!user) {
       setProfileData(null);
       setStatusOpen(false);
+      setIsExpanded(false);
       return;
     }
     setCurrentStatus(user.status || 'offline');
@@ -503,25 +548,33 @@ function UserPanel({ user, onClose, onViewProfile, onStatusChange, hasNewDm = fa
               </div>
             </div>
 
-            {/* 아바타 */}
-            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}>
+            {/* 아바타 - 확장 모드에선 60px로 축소 */}
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: isExpanded ? 8 : 14 }}>
               {d.avatar_url ? (
                 <img src={d.avatar_url} alt={d.name}
-                  style={{ width: 80, height: 80, borderRadius: '50%', objectFit: 'cover',
-                    border: '3px solid rgba(255,255,255,0.9)', boxShadow: '0 4px 16px rgba(0,0,0,0.12)' }} />
+                  style={{
+                    width: isExpanded ? 60 : 80, height: isExpanded ? 60 : 80,
+                    borderRadius: '50%', objectFit: 'cover',
+                    border: '3px solid rgba(255,255,255,0.9)', boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+                    transition: 'width 0.3s ease, height 0.3s ease',
+                  }} />
               ) : (
-                <div style={{ width: 80, height: 80, borderRadius: '50%', background: d.color,
-                  boxShadow: `0 4px 16px ${d.color}88` }} />
+                <div style={{
+                  width: isExpanded ? 60 : 80, height: isExpanded ? 60 : 80,
+                  borderRadius: '50%', background: d.color,
+                  boxShadow: `0 4px 16px ${d.color}88`,
+                  transition: 'width 0.3s ease, height 0.3s ease',
+                }} />
               )}
             </div>
 
             {/* 닉네임 */}
-            <div style={{ textAlign: 'center', marginBottom: 10 }}>
-              <span style={{ fontSize: '1.25rem', fontWeight: 800, color: '#0f1c36' }}>{d.name}</span>
+            <div style={{ textAlign: 'center', marginBottom: isExpanded ? 6 : 10 }}>
+              <span style={{ fontSize: isExpanded ? '1.05rem' : '1.25rem', fontWeight: 800, color: '#0f1c36', transition: 'font-size 0.3s ease' }}>{d.name}</span>
             </div>
 
-            {/* 기술 스택 칩 */}
-            {d.tech_stacks.length > 0 && (
+            {/* 기술 스택 칩 - 확장 모드에선 숨김 */}
+            {!isExpanded && d.tech_stacks.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'center', marginBottom: 10 }}>
                 {d.tech_stacks.map(stack => (
                   <span key={stack} style={techChipStyle}>{stack}</span>
@@ -529,8 +582,8 @@ function UserPanel({ user, onClose, onViewProfile, onStatusChange, hasNewDm = fa
               </div>
             )}
 
-            {/* 자기소개 */}
-            {d.bio && (
+            {/* 자기소개 - 확장 모드에선 숨김 */}
+            {!isExpanded && d.bio && (
               <p style={{ fontSize: '0.88rem', color: '#6b7280', textAlign: 'center', margin: '0 0 10px', lineHeight: 1.5 }}>
                 {d.bio}
               </p>
@@ -567,16 +620,19 @@ function UserPanel({ user, onClose, onViewProfile, onStatusChange, hasNewDm = fa
               </div>
             </div>
 
-            {/* 프로필 수정 / 팔로우 버튼 */}
-            <button style={profileActionBtnStyle} onClick={() => onViewProfile(d.id)}>
-              {d.isMe ? '프로필 수정' : '팔로우'}
-            </button>
+            {/* 프로필 수정 / 팔로우 버튼 - 확장 모드에선 숨김 (공간 절약) */}
+            {!isExpanded && (
+              <button style={profileActionBtnStyle} onClick={() => onViewProfile(d.id)}>
+                {d.isMe ? '프로필 수정' : '팔로우'}
+              </button>
+            )}
           </div>
 
           {/* ── 카드 2: 내 글 / 트로피 탭 ── */}
-          <div style={{ ...profileCardStyle, marginTop: 10 }}>
-            {/* 탭 헤더 */}
-            <div style={{ display: 'flex', borderBottom: '1px solid rgba(0,0,0,0.08)', marginBottom: 16 }}>
+          {/* 외부 카드: flex column, 패딩 없음 → 헤더와 스크롤 영역을 분리 */}
+          <div style={{ ...profileCardStyle, marginTop: 10, flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, padding: 0, overflow: 'hidden' }}>
+            {/* 탭 헤더 + 펼치기 토글 버튼 - 고정 (스크롤 안 됨) */}
+            <div style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid rgba(0,0,0,0.08)', padding: '0 20px', flexShrink: 0 }}>
               {[['posts', '내 글'], ['trophies', '트로피']].map(([key, label]) => (
                 <button key={key}
                   style={{
@@ -592,7 +648,22 @@ function UserPanel({ user, onClose, onViewProfile, onStatusChange, hasNewDm = fa
                   {label}
                 </button>
               ))}
+              {/* 펼치기/접기 토글 - ▲ 확장, ▼ 기본 */}
+              <button
+                onClick={() => setIsExpanded(prev => !prev)}
+                style={{
+                  border: 'none', background: 'none', cursor: 'pointer',
+                  padding: '4px 8px', fontSize: '0.75rem', color: '#9ca3af',
+                  flexShrink: 0, transition: 'color 0.2s',
+                }}
+                title={isExpanded ? '접기' : '펼치기'}
+              >
+                {isExpanded ? '▲' : '▼'}
+              </button>
             </div>
+
+            {/* 스크롤 가능한 콘텐츠 영역 - 탭 헤더는 고정, 이 영역만 스크롤됨 */}
+            <div className="tab-scroll" style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: '0 20px 16px' }}>
 
             {/* 내 글 탭 */}
             {activeTab === 'posts' && (
@@ -623,10 +694,12 @@ function UserPanel({ user, onClose, onViewProfile, onStatusChange, hasNewDm = fa
                         </span>
                       </button>
                       {/* 댓글 */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <button
+                        style={{ display: 'flex', alignItems: 'center', gap: 4, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}
+                      >
                         <img src="/message_icon.svg" alt="댓글" style={{ width: 16, height: 16, opacity: 0.5 }} />
                         <span style={{ fontSize: '0.8rem', color: '#9ca3af' }}>{post.comments}</span>
-                      </div>
+                      </button>
                       <span style={{ marginLeft: 'auto', fontSize: '0.75rem', color: '#9ca3af' }}>{post.timeAgo}</span>
                     </div>
                   </div>
@@ -638,17 +711,125 @@ function UserPanel({ user, onClose, onViewProfile, onStatusChange, hasNewDm = fa
             {activeTab === 'trophies' && (
               <div>
                 {DUMMY_TROPHIES.map(trophy => (
-                  <div key={trophy.id} style={trophyItemStyle}>
-                    {/* 트로피 아이콘 (파일 추가 전 이모지 사용) */}
-                    <div style={{ fontSize: '2rem', flexShrink: 0 }}>🏆</div>
-                    <div>
-                      <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#92400e' }}>{trophy.name}</div>
-                      <div style={{ fontSize: '0.78rem', color: '#9ca3af', marginTop: 2 }}>{trophy.desc}</div>
+                  isExpanded ? (
+                    /* 확장 모드 - 프로젝트 상세 카드 */
+                    <div key={trophy.id} style={projectCardStyle}>
+                      {/* 왼쪽: 더 큰 프로젝트 썸네일 */}
+                      <div style={projectThumbStyle}>
+                        {trophy.image ? (
+                          <img src={trophy.image} alt={trophy.title}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 8 }} />
+                        ) : (
+                          <div style={{ width: '100%', height: '100%', background: '#e5e7eb', borderRadius: 8,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2rem' }}>
+                            📁
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 가운데: 텍스트 정보 (우측 1/5 침범 금지) */}
+                      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {/* 제목 + 경과시간 */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                          <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#0f1c36',
+                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '75%' }}>
+                            {trophy.title}
+                          </span>
+                          <span style={{ fontSize: '0.68rem', color: '#9ca3af', flexShrink: 0 }}>{trophy.timeAgo}</span>
+                        </div>
+
+                        {/* 설명 - 2줄 초과 시 ... */}
+                        <p style={{
+                          margin: 0, fontSize: '0.75rem', color: '#6b7280', lineHeight: 1.4,
+                          overflow: 'hidden', display: '-webkit-box',
+                          WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+                        }}>
+                          {trophy.desc}
+                        </p>
+
+                        {/* 기술 스택 - 넘치면 ... 처리 */}
+                        <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 3, overflow: 'hidden' }}>
+                          {trophy.techStacks.slice(0, 3).map(t => (
+                            <span key={t} style={{ ...techChipStyle, fontSize: '0.65rem', padding: '2px 7px' }}>{t}</span>
+                          ))}
+                          {trophy.techStacks.length > 3 && (
+                            <span style={{ fontSize: '0.68rem', color: '#9ca3af', alignSelf: 'center' }}>...</span>
+                          )}
+                        </div>
+
+                        {/* 날짜 + 좋아요·댓글 버튼 */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 }}>
+                          <span style={{ fontSize: '0.68rem', color: '#9ca3af' }}>{trophy.dateRange}</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <button
+                              style={{ display: 'flex', alignItems: 'center', gap: 3, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}
+                              onClick={() => toggleLike('t_' + trophy.id)}
+                            >
+                              <img src="/heart.svg" alt="좋아요" style={{
+                                width: 13, height: 13,
+                                filter: likedSet.has('t_' + trophy.id)
+                                  ? 'invert(53%) sepia(90%) saturate(500%) hue-rotate(290deg) brightness(1.1)'
+                                  : 'none',
+                              }} />
+                              <span style={{ fontSize: '0.75rem', color: likedSet.has('t_' + trophy.id) ? '#ec4899' : '#9ca3af' }}>
+                                {trophy.likes + (likedSet.has('t_' + trophy.id) ? 1 : 0)}
+                              </span>
+                            </button>
+                            <button
+                              style={{ display: 'flex', alignItems: 'center', gap: 3, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}
+                            >
+                              <img src="/message_icon.svg" alt="댓글" style={{ width: 13, height: 13, opacity: 0.5 }} />
+                              <span style={{ fontSize: '0.75rem', color: '#9ca3af' }}>{trophy.comments ?? 0}</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 우측 1/5: 트로피 아이콘 전용 영역 */}
+                      <div style={{ width: 100, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        {TROPHY_GRADE[trophy.grade] && (
+                          <img src={TROPHY_GRADE[trophy.grade].src} alt={trophy.grade}
+                            style={{ width: 88, height: 88, objectFit: 'contain' }} />
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    /* 기본 모드 - 간략 표시 */
+                    <div key={trophy.id} style={trophyItemStyle}>
+                      {/* 트로피 아이콘 래퍼 - relative로 경과시간 뱃지를 우상단에 절대 배치 */}
+                      <div style={{ position: 'relative', flexShrink: 0 }}>
+                        {/* 경과시간 - 트로피 이미지 우상단 */}
+                        <span style={{
+                          position: 'absolute',
+                          top: -6,
+                          right: -4,
+                          fontSize: '0.62rem',
+                          color: '#9ca3af',
+                          whiteSpace: 'nowrap',
+                          background: 'rgba(255,255,255,0.85)',
+                          borderRadius: 4,
+                          padding: '1px 4px',
+                        }}>
+                          {trophy.timeAgo}
+                        </span>
+                        {TROPHY_GRADE[trophy.grade] ? (
+                          <img src={TROPHY_GRADE[trophy.grade].src} alt={trophy.grade}
+                            style={{ width: 64, height: 'auto', display: 'block', objectFit: 'contain' }} />
+                        ) : (
+                          <span style={{ fontSize: '2.5rem' }}>🏆</span>
+                        )}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: '1.35rem', fontWeight: 700, color: '#92400e' }}>{trophy.title}</div>
+                        <div style={{ fontSize: '0.78rem', color: '#9ca3af', marginTop: 2 }}>{trophy.desc}</div>
+                      </div>
+                    </div>
+                  )
                 ))}
               </div>
             )}
+
+            </div>{/* end of tab-scroll */}
           </div>
         </>
       )}
@@ -663,10 +844,19 @@ const wrapperStyle = {
   position: "relative",
   width: "100%",
   height: "100vh",
+  display: "flex",
+  flexDirection: "column",
   background: "radial-gradient(circle at 50% 50%, #0b1026 0%, #04060f 100%)",
   color: "white",
   fontFamily: "Inter, system-ui, sans-serif",
   overflow: "hidden",
+};
+
+const canvasHostStyle = {
+  position: "relative",
+  flex: 1,
+  minHeight: 0,
+  width: "100%",
 };
 
 const canvasWrapStyle = {
@@ -713,6 +903,21 @@ const navGlobalStyles = `
     border: 1.5px solid white;
     animation: pulse-red 1.6s ease-out infinite;
   }
+  /* 탭 스크롤 영역 - 오른쪽에 얇은 스크롤바 표시 */
+  .tab-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0,0,0,0.18) transparent;
+  }
+  .tab-scroll::-webkit-scrollbar {
+    width: 5px;
+  }
+  .tab-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .tab-scroll::-webkit-scrollbar-thumb {
+    background: rgba(0,0,0,0.18);
+    border-radius: 3px;
+  }
 `;
 
 // 랜딩 페이지와 동일한 레이아웃의 상단 네비게이션 바
@@ -735,18 +940,19 @@ const earthNavbarStyle = {
 // 메뉴 항목 목록 - 랜딩 페이지와 동일
 const navItems = ['프로필', '피드', '트로피', '상점', '로그아웃'];
 
-// 패널 전체 컨테이너 - 투명 배경, 안에 있는 카드들이 흰색
+// 패널 전체 컨테이너 - flex column: 프로필 카드 고정 + 탭 카드가 나머지 공간 차지
 const panelStyle = {
   position: "absolute",
-  top: 90,      // 상단 네비게이션 바 아래
+  top: 90,
   right: 16,
   bottom: 16,
   width: 360,
-  overflowY: "auto",
+  display: "flex",
+  flexDirection: "column",
   overflowX: "hidden",
+  overflowY: "hidden",
   transition: "transform 0.45s cubic-bezier(.2,.8,.2,1)",
   zIndex: 3,
-  // 스크롤바 숨김 (webkit)
   scrollbarWidth: "none",
 };
 
@@ -839,11 +1045,11 @@ const postItemStyle = {
   borderBottom: "1px solid rgba(0,0,0,0.06)",
 };
 
-// 트로피 아이템
+// 트로피 아이템 - gap 줄여서 아이콘과 텍스트 사이 빈 공간 최소화
 const trophyItemStyle = {
   display: "flex",
   alignItems: "center",
-  gap: 14,
+  gap: 4,
   padding: "12px 0",
   borderBottom: "1px solid rgba(0,0,0,0.06)",
 };
@@ -861,13 +1067,46 @@ const profileActionBtnStyle = {
   cursor: "pointer",
 };
 
+// 더보기 버튼
+const showMoreBtnStyle = {
+  width: "100%",
+  padding: "10px 0",
+  background: "none",
+  border: "1px solid rgba(0,0,0,0.1)",
+  borderRadius: 8,
+  fontSize: "0.82rem",
+  color: "#6b7280",
+  cursor: "pointer",
+  marginTop: 8,
+  fontWeight: 500,
+};
+
+// 확장 모드 트로피 - 프로젝트 상세 카드 (썸네일 + 정보)
+const projectCardStyle = {
+  display: "flex",
+  gap: 10,
+  padding: "10px 0",
+  borderBottom: "1px solid rgba(0,0,0,0.06)",
+  alignItems: "flex-start",
+};
+
+// 프로젝트 썸네일 (왼쪽 고정 크기 이미지)
+const projectThumbStyle = {
+  width: 96,
+  height: 84,
+  flexShrink: 0,
+  borderRadius: 8,
+  overflow: "hidden",
+  background: "#e5e7eb",
+};
+
 const labelStyle = {
-  background: "rgba(0,0,0,0.7)",
+  background: "rgba(0,0,0,0.78)",
   color: "white",
-  padding: "4px 10px",
+  padding: "6px 12px",
   borderRadius: 999,
   fontSize: 12,
   whiteSpace: "nowrap",
-  transform: "translateY(-24px)",
+  transform: "translateY(14px)",
 };
 
