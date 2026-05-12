@@ -5,7 +5,7 @@ export default function CommentList({ comments }) {
       {comments.map((c) => (
         <div key={c.id} className="feed-comment">
           {c.is_deleted ? (
-            <p className="feed-comment-deleted">삭제된 댓글입니다 (is_deleted=true)</p>
+            <p className="feed-comment-deleted">삭제된 댓글입니다</p>
           ) : (
             <>
               <strong>{c.author}</strong>

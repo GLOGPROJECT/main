@@ -4,25 +4,46 @@ import api from '../../api/axios';
 import { useAuth } from '../../auth/hooks/useAuth';
 import PostCard from '../components/PostCard';
 import CommentSection from '../components/CommentSection';
-import { addDeletedPostId, getPostById } from '../mocks/feedMock';
+import { addDeletedPostId } from '../mocks/feedMock';
 import { isAnonymousPost } from '../utils/anonAvatar';
+import { fetchPostById } from '../api/feedApi';
 
 export default function FeedPostDetailPage() {
   const { user } = useAuth();
   const { postId } = useParams();
   const navigate = useNavigate();
-  const [post, setPost] = useState(() => getPostById(postId));
+  const [post, setPost] = useState(null);
+  const [loadState, setLoadState] = useState('loading');
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   useEffect(() => {
-    setPost(getPostById(postId));
+    let cancelled = false;
+    setLoadState('loading');
+    setPost(null);
+    fetchPostById(postId)
+      .then((p) => {
+        if (cancelled) return;
+        if (p) {
+          setPost(p);
+          setLoadState('ok');
+        } else {
+          setLoadState('error');
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPost(null);
+        setLoadState('error');
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [postId]);
 
   useEffect(() => {
     const onUpdated = (e) => {
       if (String(e.detail?.postId) !== String(postId)) return;
       if (e.detail?.post) setPost(e.detail.post);
-      else setPost(getPostById(postId));
     };
     window.addEventListener('glog:post-updated', onUpdated);
     return () => window.removeEventListener('glog:post-updated', onUpdated);
@@ -32,16 +53,10 @@ export default function FeedPostDetailPage() {
     (delta) => {
       setPost((p) => {
         if (!p) return p;
-        const next = { ...p, commentsCount: Math.max(0, (p.commentsCount || 0) + delta) };
-        try {
-          sessionStorage.setItem(`glog:post:${postId}`, JSON.stringify(next));
-        } catch {
-          /* ignore */
-        }
-        return next;
+        return { ...p, commentsCount: Math.max(0, (p.commentsCount || 0) + delta) };
       });
     },
-    [postId]
+    []
   );
 
   const openEdit = () => {
@@ -53,19 +68,22 @@ export default function FeedPostDetailPage() {
     try {
       await api.delete(`/feed/${postId}`);
     } catch {
-      /* 목: DELETE /feed/:postId — soft delete 가정 */
+      /* 삭제 API 미구현 시에도 목록에서 제거 */
     }
     addDeletedPostId(postId);
-    try {
-      sessionStorage.removeItem(`glog:post:${postId}`);
-    } catch {
-      /* ignore */
-    }
     setDeleteOpen(false);
     navigate('/feed');
   };
 
-  if (!post) {
+  if (loadState === 'loading') {
+    return (
+      <div className="feed-card feed-empty">
+        <p>불러오는 중…</p>
+      </div>
+    );
+  }
+
+  if (loadState === 'error' || !post) {
     return (
       <div className="feed-card feed-empty">
         <p>존재하지 않거나 삭제된 게시글입니다.</p>
@@ -77,8 +95,9 @@ export default function FeedPostDetailPage() {
   }
 
   const anonymous = isAnonymousPost(post);
-  const currentHandle = user?.username || user?.handle || user?.name || '';
-  const canModify = !anonymous && Boolean(currentHandle) && post.author?.handle === currentHandle;
+  const loggedIn = Boolean(user);
+  const canEdit = loggedIn && post.isOwner && !isAnonymousPost(post);
+  const canDelete = loggedIn && post.isOwner;
 
   return (
     <>
@@ -86,14 +105,18 @@ export default function FeedPostDetailPage() {
         <Link to="/feed" className="feed-detail-back" style={{ marginBottom: 0 }}>
           ← 게시글
         </Link>
-        {canModify ? (
+        {canEdit || canDelete ? (
           <div style={{ display: 'flex', gap: '0.35rem' }}>
-            <button type="button" className="feed-btn-outline" onClick={openEdit}>
-              수정
-            </button>
-            <button type="button" className="feed-btn-outline" onClick={() => setDeleteOpen(true)}>
-              삭제
-            </button>
+            {canEdit ? (
+              <button type="button" className="feed-detail-action-btn" onClick={openEdit}>
+                수정
+              </button>
+            ) : null}
+            {canDelete ? (
+              <button type="button" className="feed-detail-action-btn" onClick={() => setDeleteOpen(true)}>
+                삭제
+              </button>
+            ) : null}
           </div>
         ) : null}
       </div>

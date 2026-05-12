@@ -1,5 +1,6 @@
 require('dotenv').config();
 
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
@@ -19,9 +20,12 @@ const io = new Server(server, {
   },
 });
 
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+
 app.use(cors({
   origin: process.env.FRONTEND_URL,
   credentials: true,
+  exposedHeaders: ['X-Search-Fallback'],
 }));
 app.use(express.json());
 app.use(cookieParser());
