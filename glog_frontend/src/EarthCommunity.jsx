@@ -425,6 +425,17 @@ const STATUS_CONFIG = {
   offline: { color: '#ef4444', label: '오프라인' },
 };
 
+// 기술 스택 선택 옵션 목록
+const TECH_STACK_OPTIONS = [
+  'JavaScript', 'TypeScript', 'Python', 'Java', 'Kotlin', 'Swift', 'Go', 'Rust', 'C++', 'C#',
+  'React', 'Vue', 'Angular', 'Next.js', 'Svelte',
+  'Node.js', 'Express', 'NestJS', 'Spring', 'Django', 'FastAPI',
+  'React Native', 'Flutter',
+  'MySQL', 'PostgreSQL', 'MongoDB', 'Redis',
+  'Docker', 'Kubernetes', 'AWS', 'GCP', 'Azure',
+  'GraphQL', 'Tailwind CSS', 'Git',
+];
+
 // 더미 데이터 (추후 API 연결 시 교체)
 const DUMMY_POSTS = [
   { id: 1, content: '오늘 드디어 백엔드 API 연결 완료! 🎉 CORS 3시간 잡았다...', likes: 24, comments: 3, timeAgo: '2시간 전' },
@@ -775,16 +786,13 @@ function UserPanel({ user, onClose, onViewProfile, onStatusChange, hasNewDm = fa
                         )}
                       </div>
 
-                      {/* 가운데: 텍스트 정보 (우측 1/5 침범 금지) */}
+                      {/* 가운데: 제목·설명·기술스택·기간+좋아요댓글 */}
                       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        {/* 제목 + 경과시간 */}
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                          <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#0f1c36',
-                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '75%' }}>
-                            {trophy.title}
-                          </span>
-                          <span style={{ fontSize: '0.68rem', color: '#9ca3af', flexShrink: 0 }}>{trophy.timeAgo}</span>
-                        </div>
+                        {/* 제목 */}
+                        <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#0f1c36',
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {trophy.title}
+                        </span>
 
                         {/* 설명 - 2줄 초과 시 ... */}
                         <p style={{
@@ -795,82 +803,79 @@ function UserPanel({ user, onClose, onViewProfile, onStatusChange, hasNewDm = fa
                           {trophy.desc}
                         </p>
 
-                        {/* 기술 스택 - 넘치면 ... 처리 */}
-                        <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 3, overflow: 'hidden' }}>
-                          {trophy.techStacks.slice(0, 3).map(t => (
-                            <span key={t} style={{ ...techChipStyle, fontSize: '0.65rem', padding: '2px 7px' }}>{t}</span>
+                        {/* 기술 스택 - 작게, 2개까지 표시 후 ... */}
+                        <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 2, overflow: 'hidden', alignItems: 'center' }}>
+                          {trophy.techStacks.slice(0, 2).map(t => (
+                            <span key={t} style={{
+                              ...techChipStyle, fontSize: '0.58rem', padding: '1px 6px',
+                              flexShrink: 0, maxWidth: 64,
+                              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                            }}>{t}</span>
                           ))}
-                          {trophy.techStacks.length > 3 && (
-                            <span style={{ fontSize: '0.68rem', color: '#9ca3af', alignSelf: 'center' }}>...</span>
+                          {trophy.techStacks.length > 2 && (
+                            <span style={{ fontSize: '0.58rem', color: '#9ca3af', flexShrink: 0 }}>...</span>
                           )}
                         </div>
 
-                        {/* 날짜 + 좋아요·댓글 버튼 */}
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 }}>
-                          <span style={{ fontSize: '0.68rem', color: '#9ca3af' }}>{trophy.dateRange}</span>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <button
-                              style={{ display: 'flex', alignItems: 'center', gap: 3, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}
-                              onClick={() => toggleLike('t_' + trophy.id)}
-                            >
-                              <img src="/heart.svg" alt="좋아요" style={{
-                                width: 13, height: 13,
-                                filter: likedSet.has('t_' + trophy.id)
-                                  ? 'invert(53%) sepia(90%) saturate(500%) hue-rotate(290deg) brightness(1.1)'
-                                  : 'none',
-                              }} />
-                              <span style={{ fontSize: '0.75rem', color: likedSet.has('t_' + trophy.id) ? '#ec4899' : '#9ca3af' }}>
-                                {trophy.likes + (likedSet.has('t_' + trophy.id) ? 1 : 0)}
-                              </span>
-                            </button>
-                            <button
-                              style={{ display: 'flex', alignItems: 'center', gap: 3, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}
-                            >
-                              <img src="/message_icon.svg" alt="댓글" style={{ width: 13, height: 13, opacity: 0.5 }} />
-                              <span style={{ fontSize: '0.75rem', color: '#9ca3af' }}>{trophy.comments ?? 0}</span>
-                            </button>
-                          </div>
-                        </div>
+                        {/* 프로젝트 기간 - 단독 한 줄 */}
+                        <span style={{ fontSize: '0.62rem', color: '#9ca3af', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {trophy.dateRange}
+                        </span>
                       </div>
 
-                      {/* 우측 1/5: 트로피 아이콘 전용 영역 */}
-                      <div style={{ width: 100, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      {/* 우측: 경과시간 → 트로피 아이콘 → 좋아요·댓글 */}
+                      <div style={{ width: 64, flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                        {/* 경과시간 - 트로피 위 */}
+                        <span style={{ fontSize: '0.58rem', color: '#9ca3af' }}>{trophy.timeAgo}</span>
+                        {/* 트로피 아이콘 */}
                         {TROPHY_GRADE[trophy.grade] && (
                           <img src={TROPHY_GRADE[trophy.grade].src} alt={trophy.grade}
-                            style={{ width: 88, height: 88, objectFit: 'contain' }} />
+                            style={{ width: 60, height: 'auto', objectFit: 'contain', marginTop: 10, marginRight: 11 }} />
                         )}
+                        {/* 좋아요·댓글 - 트로피 아래 */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                          <button
+                            style={{ display: 'flex', alignItems: 'center', gap: 2, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}
+                            onClick={() => toggleLike('t_' + trophy.id)}
+                          >
+                            <img src="/heart.svg" alt="좋아요" style={{
+                              width: 11, height: 11,
+                              filter: likedSet.has('t_' + trophy.id)
+                                ? 'invert(53%) sepia(90%) saturate(500%) hue-rotate(290deg) brightness(1.1)'
+                                : 'none',
+                            }} />
+                            <span style={{ fontSize: '0.62rem', color: likedSet.has('t_' + trophy.id) ? '#ec4899' : '#9ca3af' }}>
+                              {trophy.likes + (likedSet.has('t_' + trophy.id) ? 1 : 0)}
+                            </span>
+                          </button>
+                          <button
+                            style={{ display: 'flex', alignItems: 'center', gap: 2, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}
+                          >
+                            <img src="/message_icon.svg" alt="댓글" style={{ width: 11, height: 11, opacity: 0.5 }} />
+                            <span style={{ fontSize: '0.62rem', color: '#9ca3af' }}>{trophy.comments ?? 0}</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ) : (
                     /* 기본 모드 - 간략 표시 */
-                    <div key={trophy.id} style={trophyItemStyle}>
-                      {/* 트로피 아이콘 래퍼 - relative로 경과시간 뱃지를 우상단에 절대 배치 */}
-                      <div style={{ position: 'relative', flexShrink: 0 }}>
-                        {/* 경과시간 - 트로피 이미지 우상단 */}
-                        <span style={{
-                          position: 'absolute',
-                          top: -6,
-                          right: -4,
-                          fontSize: '0.62rem',
-                          color: '#9ca3af',
-                          whiteSpace: 'nowrap',
-                          background: 'rgba(255,255,255,0.85)',
-                          borderRadius: 4,
-                          padding: '1px 4px',
-                        }}>
-                          {trophy.timeAgo}
-                        </span>
-                        {TROPHY_GRADE[trophy.grade] ? (
-                          <img src={TROPHY_GRADE[trophy.grade].src} alt={trophy.grade}
-                            style={{ width: 64, height: 'auto', display: 'block', objectFit: 'contain' }} />
-                        ) : (
-                          <span style={{ fontSize: '2.5rem' }}>🏆</span>
-                        )}
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
+                    <div key={trophy.id} style={{ ...trophyItemStyle, position: 'relative', alignItems: 'flex-start' }}>
+                      {/* 트로피 아이콘 */}
+                      {TROPHY_GRADE[trophy.grade] ? (
+                        <img src={TROPHY_GRADE[trophy.grade].src} alt={trophy.grade}
+                          style={{ width: 128, height: 'auto', flexShrink: 0, objectFit: 'contain', marginLeft: -90, marginTop: -10 }} />
+                      ) : (
+                        <span style={{ fontSize: '2.5rem', flexShrink: 0 }}>🏆</span>
+                      )}
+                      {/* 제목·설명 */}
+                      <div style={{ flex: 1, minWidth: 0, paddingRight: 44 }}>
                         <div style={{ fontSize: '1.35rem', fontWeight: 700, color: '#92400e' }}>{trophy.title}</div>
                         <div style={{ fontSize: '0.78rem', color: '#9ca3af', marginTop: 2 }}>{trophy.desc}</div>
                       </div>
+                      {/* 경과시간 - 우측 상단 끝, 내 글과 동일 스타일 */}
+                      <span style={{ position: 'absolute', top: 12, right: 0, fontSize: '0.75rem', color: '#9ca3af' }}>
+                        {trophy.timeAgo}
+                      </span>
                     </div>
                   )
                 ))}
@@ -1093,11 +1098,11 @@ const postItemStyle = {
   borderBottom: "1px solid rgba(0,0,0,0.06)",
 };
 
-// 트로피 아이템 - gap 줄여서 아이콘과 텍스트 사이 빈 공간 최소화
+// 트로피 아이템
 const trophyItemStyle = {
   display: "flex",
   alignItems: "center",
-  gap: 4,
+  gap: 12,
   padding: "12px 0",
   borderBottom: "1px solid rgba(0,0,0,0.06)",
 };
@@ -1132,7 +1137,7 @@ const showMoreBtnStyle = {
 // 확장 모드 트로피 - 프로젝트 상세 카드 (썸네일 + 정보)
 const projectCardStyle = {
   display: "flex",
-  gap: 10,
+  gap: 8,
   padding: "10px 0",
   borderBottom: "1px solid rgba(0,0,0,0.06)",
   alignItems: "flex-start",
@@ -1140,8 +1145,8 @@ const projectCardStyle = {
 
 // 프로젝트 썸네일 (왼쪽 고정 크기 이미지)
 const projectThumbStyle = {
-  width: 96,
-  height: 84,
+  width: 56,
+  height: 54,
   flexShrink: 0,
   borderRadius: 8,
   overflow: "hidden",
