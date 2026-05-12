@@ -117,6 +117,41 @@ router.patch('/me/profile', authenticate, async (req, res) => {
   }
 });
 
+// GET /api/users/globe
+// 지구본에 표시할 유저 목록 — globe_lat/lon이 설정된 유저만 반환
+router.get('/globe', async (req, res) => {
+  try {
+    const users = await prisma.user.findMany({
+      where: {
+        is_deleted: false,
+        globe_lat: { not: null },
+        globe_lon: { not: null },
+      },
+      include: {
+        user_status: true,
+        tech_stacks: true,
+      },
+      take: 100,
+    });
+
+    res.json(users.map((u) => ({
+      id: u.user_id,
+      name: u.nickname,
+      bio: u.bio || '',
+      avatar_url: u.avatar_url,
+      lat: parseFloat(u.globe_lat),
+      lon: parseFloat(u.globe_lon),
+      country: u.country,
+      tech_stacks: u.tech_stacks.map((t) => t.stack_name),
+      status: u.user_status?.status ?? 'offline',
+      color: '#4e9af1',
+    })));
+  } catch (err) {
+    console.error('[GetGlobeUsers Error]', err.message);
+    res.status(500).json({ message: '서버 오류가 발생했습니다.' });
+  }
+});
+
 // GET /api/users/:userId
 // 특정 유저의 공개 프로필 조회 - 로그인 불필요 (공개 정보만 반환)
 router.get('/:userId', async (req, res) => {

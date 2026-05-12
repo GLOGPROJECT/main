@@ -4,6 +4,7 @@ const router = express.Router();
 router.use('/auth', require('../auth/routes'));
 router.use('/stats', require('../stats/routes'));
 router.use('/users', require('../users/routes'));
+router.use('/dm', require('../dm/routes'));
 
 // 이후 라우터 추가:
 // router.use('/users', require('./users'));

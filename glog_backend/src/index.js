@@ -110,6 +110,7 @@ io.on('connection', (socket) => {
   });
 });
 
+// io 인스턴스를 REST 라우터에서도 쓸 수 있도록 app에 저장
 app.set('io', io);
 
 const PORT = process.env.PORT || 4000;
