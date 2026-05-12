@@ -16,6 +16,7 @@ import FeedPostDetailPage from './feed/pages/FeedPostDetailPage';
 import FeedAnonymousPage from './feed/pages/FeedAnonymousPage';
 import { feedQueryClient } from './feed/queryClient';
 import EarthCommunity from './EarthCommunity';
+import ProfilePage from './profile/ProfilePage';
 
 export default function App() {
   return (
@@ -28,20 +29,6 @@ export default function App() {
               <Route path="/" element={<Landing />} />
               <Route path="/auth/callback" element={<OAuthCallback />} />
 
-              {/* 피드 관련 라우트 */}
-              <Route path="/tag/:slug" element={<FeedLayout />}>
-                <Route index element={<FeedTagPage />} />
-              </Route>
-              
-              <Route path="/feed" element={<FeedLayout />}>
-                <Route index element={<FeedHomePage />} />
-                <Route path="follow" element={<FeedFollowPage />} />
-                <Route path="tag" element={<FeedTagHubPage />} />
-                <Route path="tag/:slug" element={<FeedTagRedirect />} />
-                <Route path="post/:postId" element={<FeedPostDetailPage />} />
-                <Route path="anonymous" element={<FeedAnonymousPage />} />
-              </Route>
-
               {/* 로그인만 필요 (초기설정 진행 중) */}
               <Route
                 path="/initial-setup"
@@ -52,12 +39,33 @@ export default function App() {
                 }
               />
 
+              {/* 피드 관련 라우트 */}
+              <Route path="/tag/:slug" element={<FeedLayout />}>
+                <Route index element={<FeedTagPage />} />
+              </Route>
+
+              <Route path="/feed" element={<FeedLayout />}>
+                <Route index element={<FeedHomePage />} />
+                <Route path="follow" element={<FeedFollowPage />} />
+                <Route path="tag" element={<FeedTagHubPage />} />
+                <Route path="tag/:slug" element={<FeedTagRedirect />} />
+                <Route path="post/:postId" element={<FeedPostDetailPage />} />
+                <Route path="anonymous" element={<FeedAnonymousPage />} />
+              </Route>
+
+              {/* 지구본 메인 - 로그인 없이 테스트 가능 */}
               <Route
                 path="/globe"
+                element={<EarthCommunity />}
+              />
+
+              {/* 유저 프로필 페이지 - /profile/:userId */}
+              <Route
+                path="/profile/:userId"
                 element={
-                  // <ProtectedRoute> //로그인없이 테스트
-                    <EarthCommunity />
-                  // </ProtectedRoute>
+                  <ProtectedRoute>
+                    <ProfilePage />
+                  </ProtectedRoute>
                 }
               />
             </Routes>
