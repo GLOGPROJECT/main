@@ -38,7 +38,8 @@ const globalStyles = `
 
 export default function Landing() {
   // useAuth 훅에서 현재 로그인된 유저 정보와 로딩 상태를 가져옴
-  const { user, loading } = useAuth();
+  // user는 로그인된 유저 정보, 프로필 이동 시 user_id 사용
+  const { user: me, loading } = useAuth();
   const navigate = useNavigate();
 
   // 하단 통계 + 오늘 상위 커미터 2명 상태 - API에서 실제 값을 받아와 표시
@@ -65,10 +66,10 @@ export default function Landing() {
 
   // 이미 로그인된 사용자는 메인 또는 초기 설정 페이지로 자동 이동
   useEffect(() => {
-    if (!loading && user) {
-      navigate(user.is_setup_complete ? '/globe' : '/initial-setup', { replace: true });
+    if (!loading && me) {
+      navigate(me.is_setup_complete ? '/globe' : '/initial-setup', { replace: true });
     }
-  }, [user, loading, navigate]);
+  }, [me, loading, navigate]);
 
   // GitHub OAuth 실패 시 URL에 ?error=... 파라미터 처리 후 URL 정리
   useEffect(() => {
