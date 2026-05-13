@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { io } from 'socket.io-client';
 import { useAuth } from '../../auth/hooks/useAuth';
 import api, { API_ORIGIN } from '../../api/axios';
 import { getAppSocket } from '../../realtime/appSocket';
