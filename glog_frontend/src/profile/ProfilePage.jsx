@@ -2,6 +2,10 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/hooks/useAuth';
 import api from '../api/axios';
+import { LoginModalProvider } from '../feed/auth/LoginModalContext';
+import ProjectRegisterModal from '../feed/components/ProjectRegisterModal';
+import { useFeedTheme } from '../feed/theme/ThemeContext';
+import { streakBadgeEmoji } from '../utils/streakBadgeEmoji';
 
 // 선택 가능한 기술 스택 목록
 const TECH_STACK_OPTIONS = [
@@ -18,6 +22,7 @@ export default function ProfilePage() {
   const { userId } = useParams();
   const navigate = useNavigate();
   const { user: me } = useAuth();
+  const { theme, toggleTheme } = useFeedTheme();
 
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -29,6 +34,9 @@ export default function ProfilePage() {
   const [editTechStacks, setEditTechStacks] = useState([]);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
+  const [streakSyncing, setStreakSyncing] = useState(false);
+  const [streakSyncMsg, setStreakSyncMsg] = useState(null);
+  const [projectRegisterOpen, setProjectRegisterOpen] = useState(false);
 
   const isMyProfile = userId === 'me' || (me && me.user_id === parseInt(userId));
 
@@ -51,6 +59,22 @@ export default function ProfilePage() {
     };
     fetchProfile();
   }, [userId, isMyProfile]);
+
+  const handleStreakSync = async () => {
+    setStreakSyncing(true);
+    setStreakSyncMsg(null);
+    try {
+      await api.post('/users/me/streak/sync');
+      const { data: fresh } = await api.get('/users/me/profile');
+      setProfile(fresh);
+      setStreakSyncMsg('GitHub 기준으로 스트릭을 반영했습니다.');
+    } catch (err) {
+      const msg = err.response?.data?.message || '동기화에 실패했습니다.';
+      setStreakSyncMsg(msg);
+    } finally {
+      setStreakSyncing(false);
+    }
+  };
 
   // 수정 시작 — 현재 프로필 값으로 편집 상태 초기화
   const handleEditStart = () => {
@@ -90,20 +114,31 @@ export default function ProfilePage() {
     }
   };
 
-  if (loading) return (
-    <div style={styles.center}>
-      <p style={{ color: 'rgba(255,255,255,0.6)' }}>불러오는 중...</p>
-    </div>
-  );
+  if (loading) {
+    return (
+      <LoginModalProvider isLoggedIn={Boolean(me)}>
+        <div style={styles.center}>
+          <p style={{ color: 'var(--feed-muted)' }}>불러오는 중...</p>
+        </div>
+      </LoginModalProvider>
+    );
+  }
 
-  if (error) return (
-    <div style={styles.center}>
-      <p style={{ color: '#f87171' }}>{error}</p>
-      <button style={styles.backBtn} onClick={() => navigate(-1)}>← 돌아가기</button>
-    </div>
-  );
+  if (error) {
+    return (
+      <LoginModalProvider isLoggedIn={Boolean(me)}>
+        <div style={styles.center}>
+          <p style={{ color: '#f87171' }}>{error}</p>
+          <button style={styles.backBtn} onClick={() => navigate(-1)}>← 돌아가기</button>
+        </div>
+      </LoginModalProvider>
+    );
+  }
+
+  const profileStreakBadge = streakBadgeEmoji(profile.current_streak);
 
   return (
+    <LoginModalProvider isLoggedIn={Boolean(me)}>
     <div style={styles.page}>
       {/* 수정 모드일 때는 수정 취소, 뷰 모드일 때는 이전 페이지로 */}
       <button
@@ -122,7 +157,21 @@ export default function ProfilePage() {
             style={styles.avatar}
           />
           <div style={styles.headerInfo}>
-            <h1 style={styles.nickname}>{profile.nickname}</h1>
+            <div style={styles.nicknameRow}>
+              <h1 style={styles.nickname}>
+                {profile.nickname}
+                {profileStreakBadge ? ` ${profileStreakBadge}` : ''}
+              </h1>
+              <button
+                type="button"
+                className="feed-theme-toggle-btn"
+                onClick={toggleTheme}
+                title={theme === 'dark' ? '밝게' : '야간'}
+                aria-label={theme === 'dark' ? '라이트 모드' : '다크 모드'}
+              >
+                {theme === 'dark' ? '☀' : '🌙'}
+              </button>
+            </div>
             {profile.country && (
               <p style={styles.subText}>📍 {profile.country}</p>
             )}
@@ -161,6 +210,39 @@ export default function ProfilePage() {
           </div>
         </div>
 
+        {isMyProfile && profile && (
+          <div style={{ marginTop: 10, marginBottom: 4 }}>
+            <button
+              type="button"
+              style={{
+                ...styles.secondaryBtn,
+                opacity: streakSyncing || !profile.has_github_token ? 0.55 : 1,
+                cursor: streakSyncing || !profile.has_github_token ? 'not-allowed' : 'pointer',
+              }}
+              onClick={handleStreakSync}
+              disabled={streakSyncing || !profile.has_github_token}
+            >
+              {streakSyncing ? '동기화 중…' : 'GitHub 스트릭 동기화'}
+            </button>
+            {!profile.has_github_token && (
+              <p style={{ fontSize: '0.78rem', color: 'var(--feed-muted)', marginTop: 6 }}>
+                다시 로그인하면 GitHub 토큰이 저장되어 동기화할 수 있습니다.
+              </p>
+            )}
+            {streakSyncMsg && (
+              <p
+                style={{
+                  fontSize: '0.8rem',
+                  marginTop: 6,
+                  color: /실패|초과|토큰|로그인|오류/i.test(streakSyncMsg) ? '#f87171' : '#22c55e',
+                }}
+              >
+                {streakSyncMsg}
+              </p>
+            )}
+          </div>
+        )}
+
         {/* ── 수정 모드 ── */}
         {isEditing ? (
           <div style={styles.section}>
@@ -179,7 +261,7 @@ export default function ProfilePage() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 24, marginBottom: 12 }}>
               <h3 style={{ ...styles.sectionTitle, margin: 0 }}>기술 스택</h3>
               {/* 선택 수 / 최대 표시 — 5개 초과 시 빨간색 */}
-              <span style={{ fontSize: '0.8rem', color: editTechStacks.length >= MAX_STACKS ? '#f87171' : 'rgba(255,255,255,0.4)' }}>
+              <span style={{ fontSize: '0.8rem', color: editTechStacks.length >= MAX_STACKS ? '#f87171' : 'var(--feed-muted)' }}>
                 {editTechStacks.length} / {MAX_STACKS}
               </span>
               {editTechStacks.length >= MAX_STACKS && (
@@ -241,9 +323,18 @@ export default function ProfilePage() {
             {/* 버튼 영역 */}
             <div style={styles.btnRow}>
               {isMyProfile ? (
-                <button style={styles.primaryBtn} onClick={handleEditStart}>
-                  프로필 수정
-                </button>
+                <>
+                  <button style={styles.primaryBtn} onClick={handleEditStart}>
+                    프로필 수정
+                  </button>
+                  <button
+                    type="button"
+                    style={styles.secondaryBtn}
+                    onClick={() => setProjectRegisterOpen(true)}
+                  >
+                    프로젝트 등록
+                  </button>
+                </>
               ) : (
                 <button style={styles.primaryBtn} disabled>
                   팔로우 (준비 중)
@@ -254,21 +345,26 @@ export default function ProfilePage() {
         )}
       </div>
     </div>
+    <ProjectRegisterModal
+      open={projectRegisterOpen}
+      onClose={() => setProjectRegisterOpen(false)}
+    />
+    </LoginModalProvider>
   );
 }
 
 const styles = {
   page: {
     minHeight: '100vh',
-    background: '#0f1c36',
-    color: 'white',
+    background: 'var(--feed-bg-page)',
+    color: 'var(--feed-text-primary)',
     fontFamily: 'sans-serif',
     padding: '40px 60px',
   },
   center: {
     minHeight: '100vh',
-    background: '#0f1c36',
-    color: 'white',
+    background: 'var(--feed-bg-page)',
+    color: 'var(--feed-text-primary)',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
@@ -277,8 +373,8 @@ const styles = {
   },
   backBtn: {
     background: 'none',
-    border: '1px solid rgba(255,255,255,0.3)',
-    color: 'rgba(255,255,255,0.7)',
+    border: '1px solid var(--feed-border)',
+    color: 'var(--feed-text-secondary)',
     padding: '8px 16px',
     borderRadius: '8px',
     cursor: 'pointer',
@@ -288,10 +384,11 @@ const styles = {
   card: {
     maxWidth: '680px',
     margin: '0 auto',
-    background: 'rgba(255,255,255,0.05)',
-    border: '1px solid rgba(255,255,255,0.1)',
+    background: 'var(--feed-bg-card)',
+    border: '1px solid var(--feed-border)',
     borderRadius: '20px',
     padding: '40px',
+    boxShadow: 'var(--feed-shadow)',
   },
   header: {
     display: 'flex',
@@ -303,24 +400,34 @@ const styles = {
     width: '100px',
     height: '100px',
     borderRadius: '50%',
-    border: '3px solid rgba(255,255,255,0.2)',
+    border: '3px solid var(--feed-border)',
     objectFit: 'cover',
   },
-  headerInfo: { flex: 1 },
+  headerInfo: { flex: 1, minWidth: 0 },
+  nicknameRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '12px',
+    width: '100%',
+    marginBottom: '8px',
+  },
   nickname: {
     fontSize: '1.8rem',
     fontWeight: '800',
-    margin: '0 0 8px 0',
+    margin: 0,
+    lineHeight: 1.2,
+    minWidth: 0,
   },
   bio: {
     fontSize: '0.95rem',
-    color: 'rgba(255,255,255,0.7)',
+    color: 'var(--feed-text-secondary)',
     margin: '6px 0',
     lineHeight: '1.5',
   },
   subText: {
     fontSize: '0.85rem',
-    color: 'rgba(255,255,255,0.5)',
+    color: 'var(--feed-muted)',
     margin: '4px 0',
   },
   statsRow: {
@@ -328,8 +435,8 @@ const styles = {
     alignItems: 'center',
     gap: '24px',
     padding: '20px 0',
-    borderTop: '1px solid rgba(255,255,255,0.1)',
-    borderBottom: '1px solid rgba(255,255,255,0.1)',
+    borderTop: '1px solid var(--feed-border)',
+    borderBottom: '1px solid var(--feed-border)',
     marginBottom: '28px',
   },
   statItem: {
@@ -338,17 +445,17 @@ const styles = {
     alignItems: 'center',
     gap: '4px',
   },
-  statNum: { fontSize: '1.1rem', fontWeight: '700' },
-  statLabel: { fontSize: '0.75rem', color: 'rgba(255,255,255,0.5)' },
+  statNum: { fontSize: '1.1rem', fontWeight: '700', color: 'var(--feed-text-primary)' },
+  statLabel: { fontSize: '0.75rem', color: 'var(--feed-muted)' },
   statDivider: {
     width: '1px',
     height: '32px',
-    background: 'rgba(255,255,255,0.15)',
+    background: 'var(--feed-border)',
   },
   section: { marginBottom: '24px' },
   sectionTitle: {
     fontSize: '0.9rem',
-    color: 'rgba(255,255,255,0.5)',
+    color: 'var(--feed-muted)',
     fontWeight: '600',
     marginBottom: '12px',
     textTransform: 'uppercase',
@@ -360,17 +467,17 @@ const styles = {
     gap: '8px',
   },
   tagDisplay: {
-    background: 'rgba(78, 154, 241, 0.2)',
-    border: '1px solid rgba(78, 154, 241, 0.4)',
-    color: '#93c5fd',
+    background: 'color-mix(in srgb, var(--feed-accent) 18%, transparent)',
+    border: '1px solid color-mix(in srgb, var(--feed-accent) 45%, var(--feed-border))',
+    color: 'var(--feed-accent)',
     padding: '4px 12px',
     borderRadius: '20px',
     fontSize: '0.85rem',
   },
   tagSelected: {
-    background: 'rgba(78, 154, 241, 0.4)',
-    border: '1px solid rgba(78, 154, 241, 0.8)',
-    color: '#bfdbfe',
+    background: 'color-mix(in srgb, var(--feed-accent) 32%, transparent)',
+    border: '1px solid var(--feed-accent)',
+    color: 'var(--feed-accent-hover)',
     padding: '4px 12px',
     borderRadius: '20px',
     fontSize: '0.85rem',
@@ -378,18 +485,19 @@ const styles = {
     fontWeight: '600',
   },
   tagUnselected: {
-    background: 'rgba(255,255,255,0.05)',
-    border: '1px solid rgba(255,255,255,0.15)',
-    color: 'rgba(255,255,255,0.5)',
+    background: 'var(--feed-bg-page)',
+    border: '1px solid var(--feed-border)',
+    color: 'var(--feed-text-secondary)',
     padding: '4px 12px',
     borderRadius: '20px',
     fontSize: '0.85rem',
     cursor: 'pointer',
   },
   tagDisabled: {
-    background: 'rgba(255,255,255,0.02)',
-    border: '1px solid rgba(255,255,255,0.07)',
-    color: 'rgba(255,255,255,0.2)',
+    background: 'var(--feed-bg-page)',
+    border: '1px solid var(--feed-border)',
+    color: 'var(--feed-muted)',
+    opacity: 0.55,
     padding: '4px 12px',
     borderRadius: '20px',
     fontSize: '0.85rem',
@@ -398,10 +506,10 @@ const styles = {
   textarea: {
     width: '100%',
     minHeight: '100px',
-    background: 'rgba(255,255,255,0.07)',
-    border: '1px solid rgba(255,255,255,0.2)',
+    background: 'var(--feed-bg-page)',
+    border: '1px solid var(--feed-border)',
     borderRadius: '10px',
-    color: 'white',
+    color: 'var(--feed-text-primary)',
     fontSize: '0.95rem',
     padding: '12px',
     resize: 'vertical',
@@ -411,7 +519,7 @@ const styles = {
   },
   charCount: {
     fontSize: '0.75rem',
-    color: 'rgba(255,255,255,0.35)',
+    color: 'var(--feed-muted)',
     textAlign: 'right',
     margin: '4px 0 0',
   },
@@ -426,8 +534,8 @@ const styles = {
     gap: '12px',
   },
   primaryBtn: {
-    background: 'white',
-    color: '#0f1c36',
+    background: 'var(--feed-accent)',
+    color: '#ffffff',
     border: 'none',
     padding: '12px 28px',
     borderRadius: '8px',
@@ -437,11 +545,21 @@ const styles = {
   },
   cancelBtn: {
     background: 'none',
-    color: 'rgba(255,255,255,0.6)',
-    border: '1px solid rgba(255,255,255,0.25)',
+    color: 'var(--feed-text-secondary)',
+    border: '1px solid var(--feed-border)',
     padding: '12px 28px',
     borderRadius: '8px',
     fontSize: '1rem',
+    cursor: 'pointer',
+  },
+  secondaryBtn: {
+    background: 'var(--feed-bg-page)',
+    color: 'var(--feed-text-primary)',
+    border: '1px solid var(--feed-border)',
+    padding: '8px 16px',
+    borderRadius: '8px',
+    fontSize: '0.88rem',
+    fontWeight: 600,
     cursor: 'pointer',
   },
 };

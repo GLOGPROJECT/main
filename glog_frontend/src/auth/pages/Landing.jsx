@@ -76,7 +76,11 @@ export default function Landing() {
     const params = new URLSearchParams(window.location.search);
     const error = params.get('error');
     if (error === 'access_denied') alert('GitHub 권한 동의가 거부되었습니다.');
-    else if (error === 'server_error') alert('GitHub 서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+    else if (error === 'db_migration_required') {
+      alert(
+        'DB 스키마가 최신이 아닙니다. 백엔드에서 prisma/sql/add_daily_contribution_coin.sql 적용(또는 npx prisma db push) 후 다시 로그인해 주세요.',
+      );
+    } else if (error === 'server_error') alert('GitHub 서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
     if (error) window.history.replaceState({}, '', '/');
   }, []);
 

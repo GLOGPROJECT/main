@@ -27,7 +27,7 @@ function mapApiToUi(c) {
   };
 }
 
-export default function CommentSection({ postId, onCommentCountChange }) {
+export default function CommentSection({ postId, onCommentCountChange, intersectionRoot = null }) {
   const { user } = useAuth();
   const { requestLogin } = useLoginModal();
   const qc = useQueryClient();
@@ -52,7 +52,11 @@ export default function CommentSection({ postId, onCommentCountChange }) {
     getNextPageParam: (last) => (last?.nextCursor != null ? last.nextCursor : undefined),
   });
 
-  const { ref: sentinelRef, inView } = useInView({ rootMargin: '120px', threshold: 0 });
+  const { ref: sentinelRef, inView } = useInView({
+    root: intersectionRoot || undefined,
+    rootMargin: '120px',
+    threshold: 0,
+  });
 
   useEffect(() => {
     if (!inView || !hasNextPage || isFetchingNextPage) return;

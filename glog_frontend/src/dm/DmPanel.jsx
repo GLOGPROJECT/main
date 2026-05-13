@@ -130,7 +130,7 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId, sendMessage
         setMessages(msgs);
         markRead(room.id);
       } catch (err) {
-        console.error('[DmPanel] initialPartner', err);
+        console.error('[DmPanel] initialPartner 실패:', err.response?.data ?? err.message);
       } finally {
         setDirectLoading(false);
       }

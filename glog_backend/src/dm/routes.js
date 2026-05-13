@@ -33,7 +33,7 @@ const upload = multer({
 // 상대방과의 DM 방 생성 또는 기존 방 반환
 router.post('/rooms', authenticate, async (req, res) => {
   const myId = req.user.userId;
-  const { partner_id } = req.body;
+  const partner_id = parseInt(req.body.partner_id);
 
   if (!partner_id || partner_id === myId) {
     return res.status(400).json({ message: '유효하지 않은 상대방입니다.' });

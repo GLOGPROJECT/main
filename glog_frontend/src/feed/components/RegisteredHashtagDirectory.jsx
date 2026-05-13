@@ -3,24 +3,13 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import api from '../../api/axios';
 import { getTagPillColors } from '../utils/tagPillColors';
+import { MAX_TAG_SUBS, readSubscribedTagSlugs, TAG_SUBS_LS_KEY } from '../utils/tagSubscribeStorage';
 
-const SUB_LS = 'glog:hashtag-subscribe-v1';
-const MAX_TAG_SUBS = 5;
 const POPULAR_DIR_LIMIT = 200;
-
-function readSubscribedSlugs() {
-  try {
-    const raw = localStorage.getItem(SUB_LS);
-    const arr = raw ? JSON.parse(raw) : [];
-    return Array.isArray(arr) ? arr.map((s) => String(s)) : [];
-  } catch {
-    return [];
-  }
-}
 
 function writeSubscribedSlugs(list) {
   try {
-    localStorage.setItem(SUB_LS, JSON.stringify(list.slice(0, MAX_TAG_SUBS)));
+    localStorage.setItem(TAG_SUBS_LS_KEY, JSON.stringify(list.slice(0, MAX_TAG_SUBS)));
     window.dispatchEvent(new CustomEvent('glog:tag-subs-changed'));
   } catch {
     /* ignore */
@@ -37,7 +26,7 @@ function formatCompactPostCount(n) {
 /** 게시글에 등록된 해시태그 카드 목록 (검색 없음) */
 export default function RegisteredHashtagDirectory() {
   const [toast, setToast] = useState(null);
-  const [subs, setSubs] = useState(() => readSubscribedSlugs());
+  const [subs, setSubs] = useState(() => readSubscribedTagSlugs());
 
   const { data: registeredTags = [], isLoading: registeredTagsLoading } = useQuery({
     queryKey: ['hashtags', 'registered', POPULAR_DIR_LIMIT],
@@ -48,7 +37,7 @@ export default function RegisteredHashtagDirectory() {
   });
 
   useEffect(() => {
-    setSubs(readSubscribedSlugs());
+    setSubs(readSubscribedTagSlugs());
   }, []);
 
   useEffect(() => {

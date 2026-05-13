@@ -126,6 +126,10 @@ io.on('connection', (socket) => {
 
 app.set('io', io);
 
+// ── 팀원 추가: 스트릭 크론 스케줄러 ──
+const { startStreakSyncScheduler } = require('./cron/streakCron');
+startStreakSyncScheduler();
+
 const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => {
   console.log(`[Server] Running on port ${PORT}`);

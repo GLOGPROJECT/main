@@ -12,4 +12,6 @@ router.use('/comments', require('../feed/routes/commentRoutes'));
 router.use('/hashtags', require('../feed/routes/hashtagRoutes'));
 router.use('/search', require('../feed/routes/searchRoutes'));
 
+router.use('/projects', require('../projects/routes'));
+
 module.exports = router;

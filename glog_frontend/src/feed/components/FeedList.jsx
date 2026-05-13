@@ -16,11 +16,12 @@ import { API_ORIGIN } from '../../api/axios';
  * @param {'latest'|'popular'} sortOrder
  * @param {string} [tagSlug]
  * @param {number} [userId]
- * @param {object[]} [prependPosts] — 새 글 즉시 반영: 전체(all)·익명(anonymous) 탭
+ * @param {object[]} [prependPosts] — 새 글 즉시 반영: 전체(all)·익명(anonymous)·유저 본인(user) 목록
  * @param {boolean} [followListOpen] — 팔로우 탭: 모달 열림(부모 제어 시)
  * @param {(open: boolean) => void} [onFollowListOpenChange]
  * @param {boolean} [hideFollowListToolbar] — 팔로우 탭: 본문 위 툴바의 팔로우 목록 버튼 숨김
  * @param {string} [anonymousSearch] — 익명 탭: 본문 검색어(GET /feed?type=anonymous&q=)
+ * @param {(post: object) => void} [onPostSelect] — 지정 시 카드 클릭이 /feed/post 로 이동하지 않고 콜백만 호출
  */
 export default function FeedList({
   feedType,
@@ -33,6 +34,7 @@ export default function FeedList({
   onFollowListOpenChange,
   hideFollowListToolbar = false,
   anonymousSearch = '',
+  onPostSelect,
 }) {
   const { user } = useAuth();
   const followControlled =
@@ -116,6 +118,8 @@ export default function FeedList({
     const server = data?.pages ? data.pages.flatMap((p) => p.items) : [];
     let preList = [];
     if (feedType === 'all' && prependPosts.length) {
+      preList = prependPosts;
+    } else if (feedType === 'user' && prependPosts.length) {
       preList = prependPosts;
     } else if (feedType === 'anonymous' && prependPosts.length) {
       const q = String(anonymousSearch || '').trim();
@@ -297,7 +301,7 @@ export default function FeedList({
               </div>
             ) : null}
             {flat.map((post) => (
-              <PostCard key={String(post.id)} post={post} />
+              <PostCard key={String(post.id)} post={post} onSelect={onPostSelect} />
             ))}
             {isFetchingNextPage && (
               <>
@@ -317,7 +321,7 @@ export default function FeedList({
       ) : (
         <>
           {flat.map((post) => (
-            <PostCard key={String(post.id)} post={post} />
+            <PostCard key={String(post.id)} post={post} onSelect={onPostSelect} />
           ))}
           {isFetchingNextPage && (
             <>

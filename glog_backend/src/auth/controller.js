@@ -93,6 +93,8 @@ async function githubCallback(req, res) {
           avatar_url: githubUser.avatar_url,
           email: primaryEmail,
           is_setup_complete: false,
+          github_access_token: githubAccessToken,
+          github_login: githubUser.login || null,
         },
       });
       isNew = true;
@@ -104,7 +106,11 @@ async function githubCallback(req, res) {
       // 재로그인 시 GitHub 프로필 사진만 동기화
       user = await prisma.user.update({
         where: { user_id: user.user_id },
-        data: { avatar_url: githubUser.avatar_url },
+        data: {
+          avatar_url: githubUser.avatar_url,
+          github_access_token: githubAccessToken,
+          github_login: githubUser.login || null,
+        },
       });
     }
 
@@ -127,7 +133,14 @@ async function githubCallback(req, res) {
     const redirectUrl = `${FRONTEND_URL}/auth/callback?token=${accessToken}&is_new=${isNew}&setup=${user.is_setup_complete}`;
     res.redirect(redirectUrl);
   } catch (err) {
-    console.error('[GitHub OAuth Error]', err.message);
+    console.error('[GitHub OAuth Error]', err.message, err.stack);
+    const msg = String(err.message || '');
+    if (
+      /last_daily_coin_ymd|daily_contribution/i.test(msg) &&
+      /Unknown column|does not exist in the current database/i.test(msg)
+    ) {
+      return res.redirect(`${FRONTEND_URL}/?error=db_migration_required`);
+    }
     res.redirect(`${FRONTEND_URL}/?error=server_error`);
   }
 }
