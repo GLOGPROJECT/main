@@ -129,7 +129,7 @@ function mapRow(row) {
 }
 
 /** 전역 오버레이: 트로피·프로젝트 목록 + 상세 + 등록 */
-export default function TrophyModal({ open, onClose }) {
+export default function TrophyModal({ open, onClose, focusProjectId, onFocusProjectConsumed }) {
   const { theme, toggleTheme } = useFeedTheme();
   const { user, loading: authLoading } = useAuth();
   const [sort, setSort] = useState('latest');
@@ -230,6 +230,8 @@ export default function TrophyModal({ open, onClose }) {
       setCommentDraft('');
       setCommentError(null);
       setListScope('all');
+      setLoad('idle');
+      setItems([]);
     }
   }, [open]);
 
@@ -453,6 +455,25 @@ export default function TrophyModal({ open, onClose }) {
     setContributorExpand(false);
     setCarouselIdx(0);
   }, []);
+
+  useEffect(() => {
+    if (!open || focusProjectId == null) return;
+    if (!uid) {
+      onFocusProjectConsumed?.();
+      return;
+    }
+    if (load !== 'ok' && load !== 'error') return;
+    const want = Number(focusProjectId);
+    if (!Number.isFinite(want) || want <= 0) {
+      onFocusProjectConsumed?.();
+      return;
+    }
+    if (load === 'ok') {
+      const row = items.find((x) => Number(x.id) === want);
+      if (row) openDetail(row);
+    }
+    onFocusProjectConsumed?.();
+  }, [open, focusProjectId, uid, load, items, openDetail, onFocusProjectConsumed]);
 
   const gallerySlides = useMemo(() => {
     if (!selected) return [];

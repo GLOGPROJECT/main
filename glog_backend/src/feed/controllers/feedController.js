@@ -6,6 +6,7 @@
 const feedService = require('../services/feedService');
 const commentService = require('../services/commentService');
 const linkPreviewService = require('../services/linkPreviewService');
+const trendingDevelopersService = require('../services/trendingDevelopersService');
 
 function publicBaseFromReq(req) {
   return `${req.protocol}://${req.get('host')}`;
@@ -103,6 +104,17 @@ async function listFollowingMembers(req, res, next) {
   try {
     const viewerId = req.user.userId;
     const result = await feedService.listFollowingMembers(viewerId);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** GET /feed/trending-developers — GitHub 연동 공개 유저 기준 트렌딩(선택 인증) */
+async function listTrendingDevelopers(req, res, next) {
+  try {
+    const viewerId = req.user?.userId ?? null;
+    const result = await trendingDevelopersService.listTrendingDevelopers(viewerId);
     res.json(result);
   } catch (err) {
     next(err);
@@ -417,6 +429,7 @@ module.exports = {
   listComments,
   createComment,
   listSuggestedUsers,
+  listTrendingDevelopers,
   followUser,
   unfollowUser,
 };

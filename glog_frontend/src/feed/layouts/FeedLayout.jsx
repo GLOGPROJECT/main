@@ -7,6 +7,7 @@ import { getAppSocket } from '../../realtime/appSocket';
 import { useFeedTheme } from '../theme/ThemeContext';
 import ComposeModal from '../components/ComposeModal';
 import PopularHashtagsSidebar from '../components/PopularHashtagsSidebar';
+import TrendingDevelopersSidebar from '../components/TrendingDevelopersSidebar';
 import FeedSidebarSearch from '../components/FeedSidebarSearch';
 import GuestModal from '../components/GuestModal';
 import FeedNavEffects from './FeedNavEffects';
@@ -17,8 +18,25 @@ import { LoginModalProvider, useLoginModal } from '../auth/LoginModalContext';
 import { getTagPillColors, getTagPillLabelCapitalized } from '../utils/tagPillColors';
 import WeeklyActivityCard from '../components/WeeklyActivityCard';
 import { streakBadgeEmoji } from '../../utils/streakBadgeEmoji';
+import { countTrophiesByGrade } from '../../utils/trophyGradeCounts';
 
 const TAG_SUBS_LS_KEY = 'glog:hashtag-subscribe-v1';
+
+const FEED_SIDEBAR_TECH_CHIP = {
+  background: 'rgba(59, 130, 246, 0.1)',
+  border: '1px solid rgba(59, 130, 246, 0.28)',
+  color: '#3b82f6',
+  padding: '1px 5px',
+  borderRadius: 10,
+  fontSize: '0.62rem',
+  fontWeight: 500,
+};
+
+const TROPHY_GRADE_ROW = {
+  gold: { src: '/goldtrophy.svg' },
+  silver: { src: '/silvertrophy.svg' },
+  bronze: { src: '/bronzetrophy.svg' },
+};
 
 function readSubscribedTagSlugsFromStorage() {
   try {
@@ -46,7 +64,6 @@ function FeedLayoutInner() {
   const isLoggedIn = Boolean(user);
   const profileHandle = user?.nickname || user?.username || user?.handle || user?.name || '게스트';
   const profileSubtitle = user?.bio || (isLoggedIn ? 'GitHub 연동 사용자' : '로그인 후 프로필 정보가 표시됩니다.');
-  const profileMeta = isLoggedIn ? '내 계정 정보' : '비로그인 상태';
   const [myProfile, setMyProfile] = useState(null);
   const statusRaw = String(isLoggedIn ? (myProfile?.status || user?.status || 'online') : 'offline').toLowerCase();
   const statusText = statusRaw === 'online' ? '온라인' : statusRaw === 'away' ? '자리비움' : '오프라인';
@@ -87,6 +104,33 @@ function FeedLayoutInner() {
       alive = false;
     };
   }, [isLoggedIn, user?.user_id]);
+
+  const [myProjectRows, setMyProjectRows] = useState([]);
+
+  useEffect(() => {
+    let alive = true;
+    if (!isLoggedIn || !user?.user_id) {
+      setMyProjectRows([]);
+      return () => {
+        alive = false;
+      };
+    }
+    api
+      .get(`/projects/user/${user.user_id}?sort=latest`)
+      .then(({ data }) => {
+        if (!alive) return;
+        setMyProjectRows(Array.isArray(data?.items) ? data.items : []);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setMyProjectRows([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [isLoggedIn, user?.user_id]);
+
+  const feedSidebarTrophyCounts = useMemo(() => countTrophiesByGrade(myProjectRows), [myProjectRows]);
 
   const openComposeNew = useCallback((opts = {}) => {
     if (requestLogin()) return;
@@ -218,7 +262,7 @@ function FeedLayoutInner() {
         <aside className="feed-sidebar-left" aria-label="내 정보">
           <div className="feed-card">
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.65rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', opacity: 0.7 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 {isLoggedIn ? (
                   <button
                     type="button"
@@ -232,19 +276,18 @@ function FeedLayoutInner() {
                       background: 'none',
                       cursor: 'pointer',
                       padding: 0,
-                      fontSize: '1rem',
-                      lineHeight: 1,
+                      lineHeight: 0,
                       opacity: 0.85,
                     }}
                   >
-                    <span aria-hidden>✉️</span>
+                    <img src="/dm_icon.svg" alt="DM" width={20} height={20} />
                   </button>
-                ) : (
-                  <span title="DM" aria-hidden>
-                    ✉️
+                ) : null}
+                {isLoggedIn ? (
+                  <span style={{ lineHeight: 0, opacity: 0.85 }} title="알림">
+                    <img src="/notification_bell.svg" alt="" width={20} height={20} />
                   </span>
-                )}
-                <span title="알림">🔔</span>
+                ) : null}
               </div>
               {isLoggedIn ? (
                 <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.78rem' }}>
@@ -281,51 +324,142 @@ function FeedLayoutInner() {
               <div className="feed-post-meta" style={{ marginTop: '0.2rem', fontSize: '0.78rem' }}>{profileSubtitle}</div>
             </div>
 
-            <p className="feed-post-meta" style={{ marginTop: '0.55rem', textAlign: 'center' }}>
-              {profileMeta}
-            </p>
-            <p className="feed-post-author" style={{ marginTop: '0.4rem', fontSize: '0.88rem', textAlign: 'center' }}>
-              {isLoggedIn ? '내 활동 대시보드' : '로그인 후 작성/댓글이 활성화됩니다.'}
-            </p>
+            {isLoggedIn && Array.isArray(myProfile?.tech_stacks) && myProfile.tech_stacks.length > 0 ? (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, justifyContent: 'center', marginTop: '0.45rem', marginBottom: '0.35rem' }}>
+                {myProfile.tech_stacks.map((stack) => (
+                  <span key={stack} style={FEED_SIDEBAR_TECH_CHIP}>{stack}</span>
+                ))}
+              </div>
+            ) : null}
+
+            {isLoggedIn && myProfile?.bio ? (
+              <p className="feed-post-meta" style={{ margin: '0 0 0.45rem', textAlign: 'center', fontSize: '0.78rem', lineHeight: 1.42 }}>
+                {myProfile.bio}
+              </p>
+            ) : null}
+
+            {isLoggedIn ? (
+              <p style={{ textAlign: 'center', fontSize: '0.78rem', fontWeight: 700, color: '#d97706', margin: '0 0 8px' }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  보유 코인
+                  <img src="/coin_icon.svg" alt="코인" style={{ width: 15, height: 15 }} />
+                  {Number(myProfile?.coins ?? user?.coins ?? 0).toLocaleString()}
+                </span>
+              </p>
+            ) : null}
+
             {isLoggedIn ? (
               <div
                 style={{
-                  marginTop: '0.55rem',
-                  display: 'grid',
-                  gridTemplateColumns: '1fr 1fr 1fr',
-                  gap: '0.25rem',
-                  borderTop: '1px solid var(--feed-border)',
-                  paddingTop: '0.55rem',
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  gap: '10px 16px',
+                  marginBottom: 8,
+                  paddingTop: 4,
+                  paddingBottom: 8,
+                  minHeight: 48,
+                  overflow: 'visible',
+                  lineHeight: 0,
                 }}
               >
-                <div style={{ textAlign: 'center' }}>
-                  <div className="feed-post-author" style={{ fontSize: '0.95rem' }}>
-                    {Number(myProfile?.current_streak ?? user?.current_streak ?? 0)}
-                  </div>
-                  <div className="feed-post-meta" style={{ fontSize: '0.72rem' }}>스트릭</div>
-                </div>
-                <div style={{ textAlign: 'center' }}>
-                  <div className="feed-post-author" style={{ fontSize: '0.95rem' }}>
-                    {Number(myProfile?.following_count ?? 0)}
-                  </div>
-                  <div className="feed-post-meta" style={{ fontSize: '0.72rem' }}>팔로잉</div>
-                </div>
-                <div style={{ textAlign: 'center' }}>
-                  <div className="feed-post-author" style={{ fontSize: '0.95rem' }}>
-                    {Number(myProfile?.coins ?? user?.coins ?? 0)}
-                  </div>
-                  <div className="feed-post-meta" style={{ fontSize: '0.72rem' }}>코인</div>
-                </div>
+                {(['gold', 'silver', 'bronze']).map((key) => (
+                  <span
+                    key={key}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      color: 'var(--feed-text-primary)',
+                      lineHeight: 1.2,
+                    }}
+                  >
+                    <img
+                      src={TROPHY_GRADE_ROW[key].src}
+                      alt=""
+                      style={{
+                        width: 36,
+                        height: 36,
+                        maxHeight: 44,
+                        objectFit: 'contain',
+                        display: 'block',
+                        flexShrink: 0,
+                      }}
+                    />
+                    <span style={{ fontSize: '0.78rem', fontWeight: 700 }}>: {feedSidebarTrophyCounts[key]}</span>
+                  </span>
+                ))}
               </div>
             ) : null}
+
+            {isLoggedIn ? (
+              <hr style={{ border: 'none', borderTop: '1px solid var(--feed-border)', margin: '0 0 8px' }} />
+            ) : null}
+
+            {isLoggedIn ? (
+              <div style={{ display: 'flex', alignItems: 'stretch', marginBottom: '0.55rem' }}>
+                <button
+                  type="button"
+                  className="feed-profile-stat-btn"
+                  style={{ flex: 1, textAlign: 'center', minWidth: 0, background: 'none', border: 'none', padding: '4px 2px', cursor: 'pointer', color: 'inherit' }}
+                  onClick={() => navigate(`/feed/user/${user.user_id}?tab=streak`)}
+                >
+                  <div className="feed-post-author" style={{ fontSize: '0.95rem', fontWeight: 800, color: '#f59e0b' }}>
+                    {Number(myProfile?.current_streak ?? user?.current_streak ?? 0)}
+                  </div>
+                  <div className="feed-post-meta" style={{ fontSize: '0.58rem', marginTop: 2, lineHeight: 1.2 }}>커밋 스트릭</div>
+                </button>
+                <div style={{ width: 1, alignSelf: 'stretch', minHeight: 22, background: 'var(--feed-border)', flexShrink: 0 }} />
+                <button
+                  type="button"
+                  className="feed-profile-stat-btn"
+                  style={{ flex: 1, textAlign: 'center', minWidth: 0, background: 'none', border: 'none', padding: '4px 2px', cursor: 'pointer', color: 'inherit' }}
+                  onClick={() => navigate(`/feed/user/${user.user_id}?tab=projects`)}
+                >
+                  <div className="feed-post-author" style={{ fontSize: '0.95rem', fontWeight: 800 }}>
+                    {myProjectRows.length}
+                  </div>
+                  <div className="feed-post-meta" style={{ fontSize: '0.58rem', marginTop: 2, lineHeight: 1.2 }}>프로젝트</div>
+                </button>
+                <div style={{ width: 1, alignSelf: 'stretch', minHeight: 22, background: 'var(--feed-border)', flexShrink: 0 }} />
+                <button
+                  type="button"
+                  className="feed-profile-stat-btn"
+                  style={{ flex: 1, textAlign: 'center', minWidth: 0, background: 'none', border: 'none', padding: '4px 2px', cursor: 'pointer', color: 'inherit' }}
+                  onClick={() => navigate(`/feed/user/${user.user_id}?tab=following`)}
+                >
+                  <div className="feed-post-author" style={{ fontSize: '0.95rem', fontWeight: 800 }}>
+                    {Number(myProfile?.following_count ?? 0)}
+                  </div>
+                  <div className="feed-post-meta" style={{ fontSize: '0.58rem', marginTop: 2, lineHeight: 1.2 }}>팔로우 중</div>
+                </button>
+                <div style={{ width: 1, alignSelf: 'stretch', minHeight: 22, background: 'var(--feed-border)', flexShrink: 0 }} />
+                <button
+                  type="button"
+                  className="feed-profile-stat-btn"
+                  style={{ flex: 1, textAlign: 'center', minWidth: 0, background: 'none', border: 'none', padding: '4px 2px', cursor: 'pointer', color: 'inherit' }}
+                  onClick={() => navigate(`/feed/user/${user.user_id}?tab=followers`)}
+                >
+                  <div className="feed-post-author" style={{ fontSize: '0.95rem', fontWeight: 800 }}>
+                    {Number(myProfile?.follower_count ?? 0)}
+                  </div>
+                  <div className="feed-post-meta" style={{ fontSize: '0.58rem', marginTop: 2, lineHeight: 1.2 }}>팔로워</div>
+                </button>
+              </div>
+            ) : (
+              <p className="feed-post-meta" style={{ marginTop: '0.55rem', textAlign: 'center', fontSize: '0.82rem' }}>
+                로그인 후 작성/댓글이 활성화됩니다.
+              </p>
+            )}
             {isLoggedIn && user?.user_id ? (
               <button
                 type="button"
                 className="feed-btn-primary"
-                style={{ width: '100%', marginTop: '0.6rem' }}
-                onClick={() => navigate('/globe', { state: { openMyProfile: true } })}
+                style={{ width: '100%', marginTop: '0.35rem' }}
+                onClick={() => navigate(`/profile/${user.user_id}`)}
               >
-                프로필 보기
+                프로필 수정
               </button>
             ) : null}
           </div>
@@ -347,6 +481,7 @@ function FeedLayoutInner() {
           <div className="feed-card">
             <FeedSidebarSearch />
           </div>
+          <TrendingDevelopersSidebar />
           <div className="feed-card">
             <h3 style={{ margin: '0 0 0.35rem', fontSize: '0.95rem' }}>구독 피드</h3>
             <p className="feed-post-meta" style={{ margin: '0 0 0.65rem', fontSize: '0.8rem' }}>

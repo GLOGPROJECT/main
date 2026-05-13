@@ -56,3 +56,32 @@
   cursor: default;
   user-select: none;
 }
+
+/* ThemeContext(html data-theme) — 지구본 라이트 네비와 동일 톤 */
+html[data-theme='light'] .gtn-bar {
+  background: rgba(255, 255, 255, 0.92);
+  color: #0f172a;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.1);
+  backdrop-filter: blur(8px);
+}
+
+html[data-theme='light'] .gtn-logo-link {
+  color: #0f172a;
+}
+
+html[data-theme='light'] .gtn-logo-link:hover {
+  color: rgba(15, 23, 42, 0.88);
+}
+
+html[data-theme='light'] .gtn-link {
+  color: #334155;
+}
+
+html[data-theme='light'] .gtn-link:hover {
+  color: #0f172a;
+}
+
+html[data-theme='light'] .gtn-link.gtn-active {
+  color: #2563eb;
+  border-bottom-color: #2563eb;
+}

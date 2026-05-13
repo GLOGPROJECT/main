@@ -16,6 +16,7 @@ router.get('/suggested-users', authenticate, feedController.listSuggestedUsers);
 router.post('/follow/:targetUserId', authenticate, feedController.followUser);
 router.delete('/follow/:targetUserId', authenticate, feedController.unfollowUser);
 
+router.get('/trending-developers', optionalAuthenticate, feedController.listTrendingDevelopers);
 router.get('/weekly-activity', authenticate, feedController.getWeeklyActivity);
 
 router.get('/embed/preview', authenticate, feedController.getLinkPreview);

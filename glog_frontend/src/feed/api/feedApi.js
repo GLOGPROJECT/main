@@ -170,6 +170,12 @@ export async function fetchFollowingMembers() {
   return Array.isArray(data?.users) ? data.users : [];
 }
 
+/** GET /feed/trending-developers — GitHub 연동 공개 유저 트렌딩(선택 인증: 팔로우 여부) */
+export async function fetchTrendingDevelopers() {
+  const { data } = await api.get('/feed/trending-developers');
+  return Array.isArray(data?.developers) ? data.developers : [];
+}
+
 /** GET /feed/weekly-activity (JWT) — 서울 기준 주간 일별 게시 수 */
 export async function fetchWeeklyActivity() {
   const { data } = await api.get('/feed/weekly-activity');

@@ -233,6 +233,112 @@ router.get('/search', authenticate, async (req, res) => {
   }
 });
 
+// GET /api/users/:userId/contribution-days — GitHub 기여로 인정된 날짜 목록(최근)
+router.get('/:userId/contribution-days', async (req, res) => {
+  const userId = parseInt(req.params.userId, 10);
+  if (!Number.isFinite(userId) || userId < 1) {
+    return res.status(400).json({ message: '유효하지 않은 유저 ID입니다.' });
+  }
+  try {
+    const user = await prisma.user.findUnique({
+      where: { user_id: userId },
+      select: { is_deleted: true },
+    });
+    if (!user || user.is_deleted) {
+      return res.status(404).json({ message: '존재하지 않는 유저입니다.' });
+    }
+    const days = await prisma.contributionDay.findMany({
+      where: { user_id: userId },
+      orderBy: { activity_date: 'desc' },
+      take: 366,
+      select: { activity_date: true, created_at: true },
+    });
+    return res.json({
+      days: days.map((d) => ({
+        activity_date: d.activity_date,
+        synced_at: d.created_at,
+      })),
+    });
+  } catch (err) {
+    console.error('[ContributionDays Error]', err.message);
+    return res.status(500).json({ message: '서버 오류가 발생했습니다.' });
+  }
+});
+
+// GET /api/users/:userId/followers — 이 유저를 팔로우하는 사람 목록
+router.get('/:userId/followers', async (req, res) => {
+  const userId = parseInt(req.params.userId, 10);
+  if (!Number.isFinite(userId) || userId < 1) {
+    return res.status(400).json({ message: '유효하지 않은 유저 ID입니다.' });
+  }
+  try {
+    const user = await prisma.user.findUnique({
+      where: { user_id: userId },
+      select: { is_deleted: true },
+    });
+    if (!user || user.is_deleted) {
+      return res.status(404).json({ message: '존재하지 않는 유저입니다.' });
+    }
+    const rows = await prisma.follow.findMany({
+      where: { following_id: userId },
+      orderBy: { created_at: 'desc' },
+      take: 200,
+      select: {
+        created_at: true,
+        follower: { select: { user_id: true, nickname: true, avatar_url: true } },
+      },
+    });
+    return res.json({
+      users: rows.map((r) => ({
+        user_id: r.follower.user_id,
+        nickname: r.follower.nickname,
+        avatar_url: r.follower.avatar_url,
+        since: r.created_at,
+      })),
+    });
+  } catch (err) {
+    console.error('[FollowersList Error]', err.message);
+    return res.status(500).json({ message: '서버 오류가 발생했습니다.' });
+  }
+});
+
+// GET /api/users/:userId/following — 이 유저가 팔로우하는 사람 목록
+router.get('/:userId/following', async (req, res) => {
+  const userId = parseInt(req.params.userId, 10);
+  if (!Number.isFinite(userId) || userId < 1) {
+    return res.status(400).json({ message: '유효하지 않은 유저 ID입니다.' });
+  }
+  try {
+    const user = await prisma.user.findUnique({
+      where: { user_id: userId },
+      select: { is_deleted: true },
+    });
+    if (!user || user.is_deleted) {
+      return res.status(404).json({ message: '존재하지 않는 유저입니다.' });
+    }
+    const rows = await prisma.follow.findMany({
+      where: { follower_id: userId },
+      orderBy: { created_at: 'desc' },
+      take: 200,
+      select: {
+        created_at: true,
+        following: { select: { user_id: true, nickname: true, avatar_url: true } },
+      },
+    });
+    return res.json({
+      users: rows.map((r) => ({
+        user_id: r.following.user_id,
+        nickname: r.following.nickname,
+        avatar_url: r.following.avatar_url,
+        since: r.created_at,
+      })),
+    });
+  } catch (err) {
+    console.error('[FollowingList Error]', err.message);
+    return res.status(500).json({ message: '서버 오류가 발생했습니다.' });
+  }
+});
+
 // GET /api/users/:userId
 // 특정 유저의 공개 프로필 조회 - 로그인 불필요 (공개 정보만 반환)
 router.get('/:userId', async (req, res) => {
