@@ -30,6 +30,8 @@ import { SkeletonUtils } from "three-stdlib";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "./auth/hooks/useAuth";
 import api, { API_ORIGIN } from "./api/axios";
+import DmPanel from "./dm/DmPanel";
+import { useDmSocket } from "./dm/useDmSocket";
 import PetShopModal from "./petshop/petShopModal";
 import DailyRewardModal from "./daily-reward/DailyRewardModal";
 import PostCard, { HeartIcon } from "./feed/components/PostCard";
@@ -45,16 +47,16 @@ import * as THREE from "three";
 const htmlLabelPortal = typeof document !== "undefined" ? { current: document.body } : { current: null };
 
 // ──────────────────────────────────────────────────────────────────
-// 1. 데모용 유저 데이터 (위도 / 경도 기반)
+// 1. 데모용 유저 데이터 (위도 / 경도 기반) — dev push 전 주석 해제
 // ──────────────────────────────────────────────────────────────────
-const USERS = [
-  { id: "u1", name: "Jiwoo",  bio: "프론트엔드 / 서울",       lat: 37.56,  lon: 126.97, color: "#ff5d8f", avatar: "/models/avatar/f_1.glb" },
-  { id: "u2", name: "Marco",  bio: "디자이너 / 밀라노",       lat: 45.46,  lon: 9.19,   color: "#ffd166", avatar: "/models/avatar/m_2.glb" },
-  { id: "u3", name: "Aisha",  bio: "AI 연구자 / 두바이",      lat: 25.27,  lon: 55.30,  color: "#06d6a0", avatar: "/models/avatar/f_4.glb" },
-  { id: "u4", name: "Liam",   bio: "백엔드 / 뉴욕",           lat: 40.71,  lon: -74.0,  color: "#4cc9f0", avatar: "/models/avatar/m_4.glb" },
-  { id: "u5", name: "Sora",   bio: "블로거 / 도쿄",           lat: 35.68,  lon: 139.69, color: "#b388eb", avatar: "/models/avatar/f_7.glb" },
-  { id: "u6", name: "Diego",  bio: "게임 개발자 / 상파울루",  lat: -23.55, lon: -46.63, color: "#f9844a", avatar: "/models/avatar/m_6.glb" },
-];
+// const USERS = [
+//   { id: "u1", name: "Jiwoo",  bio: "프론트엔드 / 서울",       lat: 37.56,  lon: 126.97, color: "#ff5d8f", avatar: "/models/avatar/f_1.glb" },
+//   { id: "u2", name: "Marco",  bio: "디자이너 / 밀라노",       lat: 45.46,  lon: 9.19,   color: "#ffd166", avatar: "/models/avatar/m_2.glb" },
+//   { id: "u3", name: "Aisha",  bio: "AI 연구자 / 두바이",      lat: 25.27,  lon: 55.30,  color: "#06d6a0", avatar: "/models/avatar/f_4.glb" },
+//   { id: "u4", name: "Liam",   bio: "백엔드 / 뉴욕",           lat: 40.71,  lon: -74.0,  color: "#4cc9f0", avatar: "/models/avatar/m_4.glb" },
+//   { id: "u5", name: "Sora",   bio: "블로거 / 도쿄",           lat: 35.68,  lon: 139.69, color: "#b388eb", avatar: "/models/avatar/f_7.glb" },
+//   { id: "u6", name: "Diego",  bio: "게임 개발자 / 상파울루",  lat: -23.55, lon: -46.63, color: "#f9844a", avatar: "/models/avatar/m_6.glb" },
+// ];
 
 const AVATAR_POOL = [
   "/models/avatar/f_1.glb",
@@ -126,7 +128,7 @@ function parseGlobeCoord(raw, fallback) {
 // 2. GLTF 지구 모델 + 유저 마커들
 //    (자전과 마커가 같이 돌도록 한 group 안에 묶음)
 // ──────────────────────────────────────────────────────────────────
-function EarthScene({ users, autoRotate, onSelectUser, onSceneClick, dragRef, groupRef, profilePanelOpen }) {
+function EarthScene({ users = [], autoRotate, onSelectUser, onSceneClick, dragRef, groupRef, profilePanelOpen }) {
   const group = groupRef;
   const { scene } = useGLTF("/models/earth/scene.gltf");
 
@@ -182,7 +184,7 @@ function EarthScene({ users, autoRotate, onSelectUser, onSceneClick, dragRef, gr
 
 // 미리 로딩
 useGLTF.preload("/models/earth/scene.gltf");
-USERS.forEach((u) => useGLTF.preload(u.avatar));
+// USERS.forEach((u) => useGLTF.preload(u.avatar)); // 더미 데이터 사용 시 주석 해제
 AVATAR_POOL.forEach((u) => useGLTF.preload(u));
 
 // ──────────────────────────────────────────────────────────────────
@@ -268,7 +270,8 @@ function UserMarker({ position, user, onClick, profilePanelOpen }) {
       {/* 내부 그룹: 스케일 lerp 전용 */}
       <group ref={scaleRef}>
         <Suspense fallback={null}>
-          <AvatarModel url={user.avatar} />
+          {/* avatar: 더미 데이터용 GLB 경로, 없으면 기본 아바타 사용 */}
+          <AvatarModel url={user.avatar || "/models/avatar/m_1.glb"} />
         </Suspense>
       </group>
 
@@ -479,9 +482,29 @@ export default function EarthCommunity() {
   const dailyRewardCalledRef = useRef(false);
   // 랜딩 페이지와 동일한 상단 메뉴 active 상태
   const [activeNav, setActiveNav] = useState(null);
-  // 새 DM·알림 여부 - 읽으면 false로 변경 (데모: 각각 1개씩 온 상태)
-  const [hasNewDm, setHasNewDm] = useState(true);
-  const [hasNewNotif, setHasNewNotif] = useState(true);
+  const [hasNewDm, setHasNewDm] = useState(false);
+  const [hasNewNotif, setHasNewNotif] = useState(false);
+  const [dmOpen, setDmOpen] = useState(false);
+  const [dmPartnerId, setDmPartnerId] = useState(null);
+
+  // DmPanel에 등록할 수신/전송 핸들러 ref — 패널이 열릴 때 등록됨
+  const dmReceiveHandlerRef = useRef(null);
+  const dmSentHandlerRef = useRef(null);
+  const dmReadAckHandlerRef = useRef(null);
+
+  // 소켓은 EarthCommunity에서 항상 연결 유지 — 패널 닫혀있어도 새 메시지 감지
+  const { sendMessage, markRead } = useDmSocket({
+    onReceive: (msg) => {
+      if (dmReceiveHandlerRef.current) {
+        dmReceiveHandlerRef.current(msg);
+      } else {
+        setHasNewDm(true);
+      }
+    },
+    onSent: (msg) => { dmSentHandlerRef.current?.(msg); },
+    onReadAck: (room_id) => { dmReadAckHandlerRef.current?.(room_id); },
+  });
+
   const [globePostModalId, setGlobePostModalId] = useState(null);
   const [globeProjectPreview, setGlobeProjectPreview] = useState(null);
   const [globeProjectLikeBusy, setGlobeProjectLikeBusy] = useState(false);
@@ -508,10 +531,20 @@ export default function EarthCommunity() {
   const location = useLocation();
   const { user: me, updateUser, logout } = useAuth();
   const { openTrophyModal } = useTrophyModal();
+  // 소켓/DmPanel에서 내 userId 식별용 — GlobalTopNav가 없는 globe 페이지에서 직접 세팅
+  if (me) window.__myUserId = me.user_id;
 
   // 마커 클릭과 빈 배경 클릭을 구분하기 위한 ref
   // 마커 클릭 시 true로 설정 → 캔버스 onClick에서 패널 닫힘 방지
   const markerClickedRef = useRef(false);
+
+  // API에서 실유저 목록 불러오기
+  const [apiGlobeUsers, setApiGlobeUsers] = useState([]);
+  useEffect(() => {
+    api.get('/users/globe')
+      .then(({ data }) => setApiGlobeUsers(data))
+      .catch((err) => console.error('[GlobeUsers]', err));
+  }, []);
 
   // 하루 첫 로그인 보상 요청 (로그인 유저가 확인된 시점에 1회만 실행)
   useEffect(() => {
@@ -529,11 +562,14 @@ export default function EarthCommunity() {
   }, [me?.user_id, updateUser]);
 
   const globeUsers = useMemo(() => {
-    if (!me?.user_id) return USERS;
-    const hasMe = USERS.some((u) => String(u.id) === String(me.user_id));
-    if (hasMe) return USERS;
+    if (!me?.user_id) return apiGlobeUsers;
+    // API 결과에 내가 없으면 직접 추가 (id는 숫자/문자열 모두 대응)
+    const hasMe = apiGlobeUsers.some((u) => Number(u.id) === Number(me.user_id));
+    if (hasMe) return apiGlobeUsers;
     const lat = parseGlobeCoord(me.globe_lat, 37.56);
     const lon = parseGlobeCoord(me.globe_lon, 126.97);
+    // globe_lat/lon이 없으면 지구본에 표시하지 않음
+    if (!me.globe_lat || !me.globe_lon) return apiGlobeUsers;
     const meUser = {
       id: String(me.user_id),
       name: me.nickname || me.username || me.name || `user-${me.user_id}`,
@@ -546,8 +582,8 @@ export default function EarthCommunity() {
       isMe: true,
       status: me.status || "offline",
     };
-    return [meUser, ...USERS];
-  }, [me]);
+    return [meUser, ...apiGlobeUsers];
+  }, [me, apiGlobeUsers]);
 
   const buildMePanelUser = useMemo(() => {
     if (!me?.user_id) return null;
@@ -803,6 +839,22 @@ export default function EarthCommunity() {
                 }}
                 groupRef={earthRef}
                 dragRef={dragRef}
+                users={[
+                  // 로그인한 내 정보 (globe_lat/lon이 있을 때만 포함)
+                  ...(me?.globe_lat && me?.globe_lon ? [{
+                    id: me.user_id,
+                    name: me.nickname,
+                    bio: me.bio || '',
+                    avatar_url: me.avatar_url,
+                    lat: parseFloat(me.globe_lat),
+                    lon: parseFloat(me.globe_lon),
+                    color: '#4e9af1',
+                    status: me.status || 'offline',
+                    isMe: true,
+                  }] : []),
+                  // DB에서 불러온 다른 유저들 (본인 제외)
+                  ...globeUsers.filter((u) => u.id !== me?.user_id),
+                ]}
               />
             </Suspense>
             <CameraRig selectedUser={selectedUser} earthRef={earthRef} zoomRef={zoomRef} />
@@ -909,8 +961,9 @@ export default function EarthCommunity() {
         onStatusChange={(newStatus) => updateUser({ status: newStatus })}
         hasNewDm={hasNewDm}
         hasNewNotif={hasNewNotif}
-        onDmClick={() => setHasNewDm(false)}
+        onDmClick={() => { setHasNewDm(false); setDmPartnerId(null); setDmOpen(true); }}
         onNotifClick={() => setHasNewNotif(false)}
+        onSendDm={(partnerId) => { setDmPartnerId(Number(partnerId)); setDmOpen(true); }}
         onOpenFeedPost={(pid) => setGlobePostModalId(String(pid))}
         onViewMorePosts={(nickname) => {
           const uid = Number(selectedUser?.id);
@@ -1495,6 +1548,20 @@ export default function EarthCommunity() {
           setTrophyRefreshKey((k) => k + 1);
         }}
       />
+
+      {/* DM 패널 */}
+      {me && (
+        <DmPanel
+          isOpen={dmOpen}
+          onClose={() => { setDmOpen(false); setDmPartnerId(null); }}
+          initialPartnerId={dmPartnerId}
+          sendMessage={sendMessage}
+          markRead={markRead}
+          registerReceive={(fn) => { dmReceiveHandlerRef.current = fn; }}
+          registerSent={(fn) => { dmSentHandlerRef.current = fn; }}
+          registerReadAck={(fn) => { dmReadAckHandlerRef.current = fn; }}
+        />
+      )}
     </div>
     </LoginModalProvider>
   );
@@ -1531,7 +1598,7 @@ const DUMMY_POSTS = [
 
 // hasNewDm, hasNewNotif: 새 메시지·알림 여부 → true면 아이콘 왼쪽 하단에 빨간 점 표시
 // onDmClick / onNotifClick: 아이콘 클릭 시 부모에서 읽음 처리
-function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNewDm = false, hasNewNotif = false, onDmClick, onNotifClick, onOpenFeedPost, onViewMorePosts, onOpenProject, trophyRefreshKey = 0, postListRefreshKey = 0, onPostLikeUpdated }) {
+function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNewDm = false, hasNewNotif = false, onDmClick, onNotifClick, onSendDm, onOpenFeedPost, onViewMorePosts, onOpenProject, trophyRefreshKey = 0, postListRefreshKey = 0, onPostLikeUpdated }) {
   const open = !!user;
 
   const [profileData, setProfileData] = useState(null);
@@ -1543,6 +1610,8 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
   const [likedSet, setLikedSet] = useState(new Set());
   // 내 글/트로피 카드 펼치기 모드 (true: 확장, false: 기본)
   const [isExpanded, setIsExpanded] = useState(false);
+  // 팔로우 상태 — 실제 API 연결 전 로컬 토글
+  const [isFollowing, setIsFollowing] = useState(false);
   const [trophyList, setTrophyList] = useState([]);
   const [trophiesLoad, setTrophiesLoad] = useState('idle'); // idle | loading | ok | error
   const [trophySort, setTrophySort] = useState('latest'); // 'latest' | 'popular'
@@ -1647,6 +1716,7 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
       setUserPosts([]);
       setStatusOpen(false);
       setIsExpanded(false);
+      setIsFollowing(false);
       setTrophyList([]);
       setTrophiesLoad('idle');
       return;
@@ -1788,7 +1858,9 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
                   - 내 프로필: DM(새 메시지 표시) + 알림 벨(새 알림 표시)
                   - 타유저 프로필: DM 아이콘만 표시 (빨간 점 없음), 알림 벨 숨김 */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{ ...iconBoxStyle, position: 'relative' }} onClick={d.isMe ? onDmClick : undefined}>
+                {/* 내 프로필: DM 아이콘 클릭 시 내 메시지함 열기 / 타유저: 해당 유저와 바로 DM 시작 */}
+                <div style={{ ...iconBoxStyle, position: 'relative', cursor: 'pointer' }}
+                  onClick={d.isMe ? onDmClick : () => onSendDm?.(d.id)}>
                   <img src="/dm_icon.svg" alt="DM" style={iconImgStyle} />
                   {d.isMe && hasNewDm && <div className="notif-dot" />}
                 </div>
@@ -1904,11 +1976,23 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
               </div>
             </div>
 
-            {/* 프로필 수정 / 팔로우 버튼 - 확장 모드에선 숨김 (공간 절약) */}
+            {/* 프로필 수정(본인) / 팔로우 토글(타유저) - 확장 모드에선 숨김 */}
             {!isExpanded && (
-              <button style={{ ...profileActionBtnStyle, padding: '9px', fontSize: '0.84rem' }} onClick={() => onViewProfile(d.id)}>
-                {d.isMe ? '프로필 수정' : '팔로우'}
-              </button>
+              d.isMe ? (
+                <button style={profileActionBtnStyle} onClick={() => onViewProfile(d.id)}>
+                  프로필 수정
+                </button>
+              ) : (
+                <button
+                  style={isFollowing
+                    ? { ...profileActionBtnStyle, background: 'rgba(255,255,255,0.08)', color: '#000000', border: '1px solid rgba(255,255,255,0.2)' }
+                    : profileActionBtnStyle
+                  }
+                  onClick={() => setIsFollowing((prev) => !prev)}
+                >
+                  {isFollowing ? '팔로잉' : '팔로우'}
+                </button>
+              )
             )}
           </div>
 
@@ -2062,7 +2146,7 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
                 ))}
                 <button
                   type="button"
-                  style={{ ...showMoreBtnStyle, marginTop: 8 }}
+                  style={{ marginTop: 8, background: 'none', border: 'none', color: '#3b82f6', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer', padding: '4px 0' }}
                   onClick={() => onViewMorePosts?.(String(d?.name ?? '').trim())}
                 >
                   더보기 →
@@ -2510,20 +2594,6 @@ const profileActionBtnStyle = {
   fontSize: "0.95rem",
   fontWeight: 700,
   cursor: "pointer",
-};
-
-// 더보기 버튼
-const showMoreBtnStyle = {
-  width: "100%",
-  padding: "10px 0",
-  background: "none",
-  border: "1px solid rgba(0,0,0,0.1)",
-  borderRadius: 8,
-  fontSize: "0.82rem",
-  color: "#6b7280",
-  cursor: "pointer",
-  marginTop: 8,
-  fontWeight: 500,
 };
 
 // 확장 모드 트로피 - 프로젝트 상세 카드 (썸네일 + 정보)

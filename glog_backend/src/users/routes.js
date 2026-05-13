@@ -173,6 +173,41 @@ router.patch('/me/profile', authenticate, async (req, res) => {
   }
 });
 
+// GET /api/users/globe
+// 지구본에 표시할 유저 목록 — globe_lat/lon이 설정된 유저만 반환
+router.get('/globe', async (req, res) => {
+  try {
+    const users = await prisma.user.findMany({
+      where: {
+        is_deleted: false,
+        globe_lat: { not: null },
+        globe_lon: { not: null },
+      },
+      include: {
+        user_status: true,
+        tech_stacks: true,
+      },
+      take: 100,
+    });
+
+    res.json(users.map((u) => ({
+      id: u.user_id,
+      name: u.nickname,
+      bio: u.bio || '',
+      avatar_url: u.avatar_url,
+      lat: parseFloat(u.globe_lat),
+      lon: parseFloat(u.globe_lon),
+      country: u.country,
+      tech_stacks: u.tech_stacks.map((t) => t.stack_name),
+      status: u.user_status?.status ?? 'offline',
+      color: '#4e9af1',
+    })));
+  } catch (err) {
+    console.error('[GetGlobeUsers Error]', err.message);
+    res.status(500).json({ message: '서버 오류가 발생했습니다.' });
+  }
+});
+
 // GET /api/users/search?q= — 닉네임 부분 검색 (로그인 필요, 프로젝트 기여자 추가용). `/:userId`보다 먼저 등록.
 router.get('/search', authenticate, async (req, res) => {
   const q = String(req.query.q || '').trim().slice(0, 40);
