@@ -12,7 +12,7 @@ import { useAuth } from '../../auth/hooks/useAuth';
 import { API_ORIGIN } from '../../api/axios';
 
 /**
- * @param {'all'|'following'|'tag'|'user'|'anonymous'} feedType
+ * @param {'all'|'following'|'tag'|'user'|'user_likes'|'anonymous'} feedType
  * @param {'latest'|'popular'} sortOrder
  * @param {string} [tagSlug]
  * @param {number} [userId]
@@ -54,14 +54,16 @@ export default function FeedList({
       tagSlug || '',
       String(userId ?? ''),
       feedType === 'anonymous' ? String(anonymousSearch || '').trim() : '',
-      feedType === 'anonymous' ? '' : prependKey,
+      feedType === 'anonymous' || feedType === 'user_likes' ? '' : prependKey,
       user?.user_id ?? 'g',
     ],
     [feedType, sortOrder, tagSlug, userId, anonymousSearch, prependKey, user?.user_id]
   );
 
   const followingNeedsAuth = feedType === 'following' && !user;
-  const userFeedDisabled = feedType === 'user' && (!Number.isFinite(Number(userId)) || Number(userId) < 1);
+  const userFeedDisabled =
+    (feedType === 'user' || feedType === 'user_likes') &&
+    (!Number.isFinite(Number(userId)) || Number(userId) < 1);
   const queryEnabled = !followingNeedsAuth && !userFeedDisabled;
 
   const { data, status, error, fetchNextPage, hasNextPage, isFetchingNextPage, isFetching } = useInfiniteQuery({
@@ -225,7 +227,7 @@ export default function FeedList({
   if (status === 'error') {
     const code = error?.response?.data?.code;
     const detail =
-      feedType === 'user' && code === 'USER_NOT_FOUND'
+      (feedType === 'user' || feedType === 'user_likes') && code === 'USER_NOT_FOUND'
         ? '사용자를 찾을 수 없습니다.'
         : error?.response?.data?.error || error?.message || 'unknown';
     return (
@@ -273,10 +275,12 @@ export default function FeedList({
         </div>
       );
     }
-    if (feedType === 'user') {
+    if (feedType === 'user' || feedType === 'user_likes') {
       return (
         <div className="feed-card feed-empty">
-          <p>게시글이 없어요</p>
+          <p style={{ margin: 0 }}>
+            {feedType === 'user_likes' ? '좋아요한 게시글이 없어요' : '게시글이 없어요'}
+          </p>
         </div>
       );
     }

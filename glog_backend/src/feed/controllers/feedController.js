@@ -152,6 +152,29 @@ async function listUserFeed(req, res, next) {
   }
 }
 
+/** GET /feed/user/:userId/likes — 해당 유저가 좋아요한 게시글 */
+async function listUserLikedFeed(req, res, next) {
+  try {
+    const uid = parseInt(req.params.userId, 10);
+    if (Number.isNaN(uid)) {
+      return res.status(400).json({ error: '잘못된 사용자 ID입니다.', code: 'VALIDATION_ERROR' });
+    }
+    const viewerId = req.user?.userId ?? null;
+    const base = publicBaseFromReq(req);
+    const result = await feedService.listUserLikedFeed(
+      uid,
+      { last_post_id: req.query.last_post_id, limit: req.query.limit },
+      viewerId,
+      base,
+    );
+    res.json(result);
+  } catch (err) {
+    const sent = handleFeedError(err, res);
+    if (sent) return;
+    next(err);
+  }
+}
+
 /** GET /feed/:postId */
 async function getPost(req, res, next) {
   try {
@@ -383,6 +406,7 @@ module.exports = {
   listFollowingMembers,
   getTagFeed,
   listUserFeed,
+  listUserLikedFeed,
   getPost,
   getWeeklyActivity,
   getLinkPreview,

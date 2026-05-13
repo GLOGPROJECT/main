@@ -14,10 +14,13 @@ export default function FeedUserPage() {
   const uid = parseInt(String(userIdParam), 10);
   const invalidId = !Number.isFinite(uid) || uid < 1;
 
+  const isOwnProfile = user != null && Number(user.user_id) === uid;
   const goAllFeed = () => navigate('/feed');
 
-  const isOwnProfile = user != null && Number(user.user_id) === uid;
+  const postsTabLabel = isOwnProfile ? '공개·익명 게시글' : '공개 게시글';
+
   const [prependPosts, setPrependPosts] = useState([]);
+  const [listTab, setListTab] = useState('posts');
 
   useEffect(() => {
     if (!isOwnProfile) return;
@@ -64,13 +67,37 @@ export default function FeedUserPage() {
             <div className="feed-post-author" style={{ fontSize: '1.05rem' }}>
               {nickname && String(nickname).trim() ? nickname : `유저 #${userIdParam}`}
             </div>
-            <p className="feed-post-meta" style={{ margin: '0.35rem 0 0', fontSize: '0.82rem' }}>
-              {isOwnProfile ? '공개·익명 게시글' : '공개 게시글'}
-            </p>
+            <div className="feed-user-page-tabs" role="tablist" aria-label="게시글 구분">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={listTab === 'posts'}
+                className={`feed-user-page-tab${listTab === 'posts' ? ' feed-user-page-tab--active' : ''}`}
+                onClick={() => setListTab('posts')}
+              >
+                {postsTabLabel}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={listTab === 'likes'}
+                className={`feed-user-page-tab${listTab === 'likes' ? ' feed-user-page-tab--active' : ''}`}
+                onClick={() => setListTab('likes')}
+              >
+                좋아요
+              </button>
+            </div>
           </div>
         </div>
       </div>
-      <FeedList feedType="user" sortOrder="latest" userId={uid} tagSlug="" prependPosts={isOwnProfile ? prependPosts : []} />
+      <FeedList
+        key={`user-${uid}-${listTab}`}
+        feedType={listTab === 'likes' ? 'user_likes' : 'user'}
+        sortOrder="latest"
+        userId={uid}
+        tagSlug=""
+        prependPosts={listTab === 'posts' && isOwnProfile ? prependPosts : []}
+      />
     </>
   );
 }

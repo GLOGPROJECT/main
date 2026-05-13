@@ -3,6 +3,21 @@ import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, useAnimations } from '@react-three/drei';
 import { SkeletonUtils } from 'three-stdlib';
 
+const AVATAR_POOL = [
+  '/models/avatar/f_1.glb',
+  '/models/avatar/m_2.glb',
+  '/models/avatar/f_4.glb',
+  '/models/avatar/m_4.glb',
+  '/models/avatar/f_7.glb',
+  '/models/avatar/m_6.glb',
+];
+
+function pickAvatarByUserId(userId) {
+  const n = Number(userId);
+  const idx = Number.isFinite(n) ? Math.abs(n) % AVATAR_POOL.length : 0;
+  return AVATAR_POOL[idx];
+}
+
 /** 뷰어 전용 아바타 — scale / rotationY 외부에서 제어 */
 function AvatarViewer({ url, scale, rotationY }) {
   const { scene, animations } = useGLTF(url);
@@ -186,6 +201,7 @@ const css = `
 export default function AvatarViewerModal({ user }) {
   const [modelScale, setModelScale] = useState(1.0);
   const [rotY, setRotY] = useState(0);
+  const modelUrl = user?.avatar || user?.model_url || pickAvatarByUserId(user?.id);
 
   // 유저가 바뀔 때 슬라이더 초기화
   useEffect(() => {
@@ -193,7 +209,7 @@ export default function AvatarViewerModal({ user }) {
     setRotY(0);
   }, [user?.id]);
 
-  if (!user?.avatar) return null;
+  if (!user) return null;
 
   return (
     <>
@@ -214,7 +230,7 @@ export default function AvatarViewerModal({ user }) {
             <Lights />
             <Suspense fallback={null}>
               <AvatarViewer
-                url={user.avatar}
+                url={modelUrl}
                 scale={modelScale}
                 rotationY={rotY * (Math.PI / 180)}
               />

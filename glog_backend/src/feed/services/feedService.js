@@ -463,6 +463,93 @@ async function listUserFeed(targetUserId, { last_post_id, limit: limitRaw, sort:
   });
 }
 
+/** 해당 유저가 좋아요한 글 목록 (좋아요 누른 시각 최신순). 비공개 프로필은 본인만 */
+async function listUserLikedFeed(targetUserId, { last_post_id, limit: limitRaw }, viewerId, publicBase) {
+  const limit = clampLimit(limitRaw);
+  const user = await prisma.user.findUnique({
+    where: { user_id: targetUserId },
+    select: { user_id: true, is_deleted: true, is_private: true },
+  });
+  if (!user || user.is_deleted) {
+    const e = new Error('USER_NOT_FOUND');
+    e.code = 'USER_NOT_FOUND';
+    throw e;
+  }
+  if (user.is_private && viewerId !== user.user_id) {
+    return { posts: [], nextCursor: null };
+  }
+
+  const blockedIds = await getBlockedUserIds(viewerId);
+  const visibilityOr = [{ type: 'public' }, { type: 'anonymous' }];
+  if (viewerId != null) {
+    visibilityOr.push({ type: 'secret', user_id: viewerId });
+  }
+  const authorW = authorNotBlockedWhere(viewerId, blockedIds);
+  const postAndClauses = [{ OR: visibilityOr }];
+  if (authorW && Object.keys(authorW).length > 0) {
+    postAndClauses.push(authorW);
+  }
+  const postBaseWhere = {
+    is_deleted: false,
+    AND: postAndClauses,
+  };
+
+  let likeCursorWhere = {};
+  if (last_post_id !== undefined && last_post_id !== null && last_post_id !== '') {
+    const lid = parseInt(last_post_id, 10);
+    if (Number.isNaN(lid)) {
+      const e = new Error('INVALID_CURSOR');
+      e.code = 'INVALID_CURSOR';
+      throw e;
+    }
+    const anchorLike = await prisma.postLike.findFirst({
+      where: { user_id: targetUserId, post_id: lid },
+      select: { created_at: true, post_id: true },
+    });
+    if (!anchorLike) {
+      const e = new Error('INVALID_CURSOR');
+      e.code = 'INVALID_CURSOR';
+      throw e;
+    }
+    likeCursorWhere = {
+      OR: [
+        { created_at: { lt: anchorLike.created_at } },
+        {
+          AND: [{ created_at: anchorLike.created_at }, { post_id: { lt: anchorLike.post_id } }],
+        },
+      ],
+    };
+  }
+
+  const take = limit + 1;
+  const likeRows = await prisma.postLike.findMany({
+    where: {
+      user_id: targetUserId,
+      ...likeCursorWhere,
+      post: postBaseWhere,
+    },
+    orderBy: [{ created_at: 'desc' }, { post_id: 'desc' }],
+    take,
+    include: {
+      post: {
+        include: postListInclude(viewerId),
+      },
+    },
+  });
+
+  const hasMore = likeRows.length > limit;
+  const slice = hasMore ? likeRows.slice(0, limit) : likeRows;
+  const nextCursor = hasMore && slice.length ? slice[slice.length - 1].post_id : null;
+  const posts = slice
+    .map((row) => {
+      if (!row.post) return null;
+      const base = mapPost(row.post, viewerId, publicBase);
+      return { ...base, liked_at: row.created_at.toISOString() };
+    })
+    .filter(Boolean);
+  return { posts, nextCursor };
+}
+
 async function toggleLikePost(userId, postId) {
   return prisma.$transaction(async (tx) => {
     const rows =
@@ -1023,6 +1110,7 @@ module.exports = {
   listFollowingFeed,
   listTagFeed,
   listUserFeed,
+  listUserLikedFeed,
   getPostById,
   toggleLikePost,
   createPost,

@@ -7,6 +7,7 @@ import { getAppSocket } from '../../realtime/appSocket';
 import { toggleTrophyLike } from '../api/feedApi';
 import { HeartIcon } from '../components/PostCard';
 import ProjectRegisterModal from '../components/ProjectRegisterModal';
+import { useFeedTheme } from '../theme/ThemeContext';
 
 const TROPHY_SRC = {
   gold: '/goldtrophy.svg',
@@ -129,8 +130,10 @@ function mapRow(row) {
 
 /** 전역 오버레이: 트로피·프로젝트 목록 + 상세 + 등록 */
 export default function TrophyModal({ open, onClose }) {
+  const { theme, toggleTheme } = useFeedTheme();
   const { user, loading: authLoading } = useAuth();
   const [sort, setSort] = useState('latest');
+  const [listScope, setListScope] = useState('all');
   const [items, setItems] = useState([]);
   const [load, setLoad] = useState('idle');
   const [likedSet, setLikedSet] = useState(() => new Set());
@@ -162,19 +165,26 @@ export default function TrophyModal({ open, onClose }) {
     if (!silent) setLoad('loading');
     try {
       const sortParam = sort === 'oldest' ? 'oldest' : 'latest';
-      const { data } = await api.get('/projects/community', { params: { sort: sortParam } });
-      const rows = Array.isArray(data?.items) ? data.items : [];
+      let rows = [];
+      if (listScope === 'mine' && uid) {
+        const { data } = await api.get(`/projects/user/${uid}`, { params: { sort: sortParam } });
+        rows = Array.isArray(data?.items) ? data.items : [];
+      } else {
+        const { data } = await api.get('/projects/community', { params: { sort: sortParam } });
+        rows = Array.isArray(data?.items) ? data.items : [];
+        if (listScope === 'liked') {
+          rows = rows.filter((r) => r.liked_by_me);
+        }
+      }
       setItems(rows.map(mapRow));
-      setLikedSet(
-        new Set(rows.filter((r) => r.liked_by_me).map((r) => `t_${r.trophy_id}`)),
-      );
+      setLikedSet(new Set(rows.filter((r) => r.liked_by_me).map((r) => `t_${r.trophy_id}`)));
       setLoad('ok');
     } catch {
       if (!silent) {
         setLoad('error');
       }
     }
-  }, [sort]);
+  }, [sort, listScope, uid]);
 
   useEffect(() => {
     if (!open) return;
@@ -219,6 +229,7 @@ export default function TrophyModal({ open, onClose }) {
       setProjectComments([]);
       setCommentDraft('');
       setCommentError(null);
+      setListScope('all');
     }
   }, [open]);
 
@@ -496,7 +507,7 @@ export default function TrophyModal({ open, onClose }) {
     position: 'fixed',
     inset: 0,
     zIndex: 12500,
-    background: 'rgba(15, 28, 54, 0.55)',
+    background: 'var(--feed-overlay, rgba(15, 28, 54, 0.55))',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -512,7 +523,7 @@ export default function TrophyModal({ open, onClose }) {
     background: 'var(--feed-bg-card, #fff)',
     color: 'var(--feed-text-primary, #0f172a)',
     borderRadius: 16,
-    boxShadow: '0 24px 64px rgba(0,0,0,0.35)',
+    boxShadow: 'var(--feed-shadow, 0 24px 64px rgba(0,0,0,0.35))',
     border: '1px solid var(--feed-border, rgba(0,0,0,0.08))',
   };
 
@@ -546,22 +557,33 @@ export default function TrophyModal({ open, onClose }) {
             <h2 id="trophy-modal-title" style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800 }}>
               트로피 목록
             </h2>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="닫기"
-              style={{
-                border: 'none',
-                background: 'none',
-                fontSize: '1.4rem',
-                lineHeight: 1,
-                cursor: 'pointer',
-                color: muted,
-                padding: '4px 8px',
-              }}
-            >
-              ×
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button
+                type="button"
+                className="feed-theme-toggle-btn"
+                onClick={toggleTheme}
+                title={theme === 'dark' ? '밝게' : '야간'}
+                aria-label={theme === 'dark' ? '라이트 모드' : '다크 모드'}
+              >
+                {theme === 'dark' ? '☀' : '🌙'}
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="닫기"
+                style={{
+                  border: 'none',
+                  background: 'none',
+                  fontSize: '1.4rem',
+                  lineHeight: 1,
+                  cursor: 'pointer',
+                  color: muted,
+                  padding: '4px 8px',
+                }}
+              >
+                ×
+              </button>
+            </div>
           </div>
         )}
 
@@ -597,6 +619,15 @@ export default function TrophyModal({ open, onClose }) {
               ← 트로피 목록으로
             </button>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="feed-theme-toggle-btn"
+                onClick={toggleTheme}
+                title={theme === 'dark' ? '밝게' : '야간'}
+                aria-label={theme === 'dark' ? '라이트 모드' : '다크 모드'}
+              >
+                {theme === 'dark' ? '☀' : '🌙'}
+              </button>
               {uid && selected?.ownerUserId != null && Number(selected.ownerUserId) === Number(uid) ? (
                 <>
                   <button
@@ -606,7 +637,8 @@ export default function TrophyModal({ open, onClose }) {
                       padding: '6px 12px',
                       borderRadius: 8,
                       border: `1px solid ${border}`,
-                      background: '#f1f5f9',
+                      background: 'var(--feed-bg-page)',
+                      color: 'var(--feed-text-primary)',
                       cursor: 'pointer',
                       fontSize: '0.82rem',
                       fontWeight: 600,
@@ -676,6 +708,46 @@ export default function TrophyModal({ open, onClose }) {
           {!authLoading && user && !isDetail && (
             <>
               <div
+                role="tablist"
+                aria-label="프로젝트 목록 구분"
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: 4,
+                  marginBottom: 14,
+                  borderBottom: `1px solid ${border}`,
+                  paddingBottom: 2,
+                }}
+              >
+                {[
+                  { id: 'all', label: '전체' },
+                  { id: 'liked', label: '좋아요' },
+                  { id: 'mine', label: '내 프로젝트' },
+                ].map(({ id, label }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    role="tab"
+                    aria-selected={listScope === id}
+                    onClick={() => setListScope(id)}
+                    style={{
+                      margin: 0,
+                      padding: '8px 12px',
+                      border: 'none',
+                      borderBottom: `2px solid ${listScope === id ? 'var(--feed-accent)' : 'transparent'}`,
+                      marginBottom: -3,
+                      background: 'none',
+                      cursor: 'pointer',
+                      fontSize: '0.88rem',
+                      fontWeight: listScope === id ? 700 : 500,
+                      color: listScope === id ? 'var(--feed-accent)' : 'var(--feed-text-secondary)',
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div
                 style={{
                   display: 'flex',
                   flexWrap: 'wrap',
@@ -686,15 +758,11 @@ export default function TrophyModal({ open, onClose }) {
                 }}
               >
                 <p style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700 }}>
-                  총{' '}
-                  {load === 'ok' || (load === 'error' && items.length > 0)
-                    ? items.length
-                    : load === 'error'
-                      ? '—'
-                      : load === 'loading'
-                        ? '…'
-                        : 0}
-                  개의 프로젝트
+                  {listScope === 'liked'
+                    ? `좋아요한 프로젝트 ${load === 'ok' || (load === 'error' && items.length > 0) ? items.length : load === 'error' ? '—' : load === 'loading' ? '…' : 0}개`
+                    : listScope === 'mine'
+                      ? `내 프로젝트 ${load === 'ok' || (load === 'error' && items.length > 0) ? items.length : load === 'error' ? '—' : load === 'loading' ? '…' : 0}개`
+                      : `총 ${load === 'ok' || (load === 'error' && items.length > 0) ? items.length : load === 'error' ? '—' : load === 'loading' ? '…' : 0}개의 프로젝트`}
                 </p>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                   <label className="feed-post-meta" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -729,10 +797,16 @@ export default function TrophyModal({ open, onClose }) {
                 <p className="feed-post-meta" style={{ margin: '0.5rem 0' }}>불러오는 중…</p>
               )}
               {load === 'error' && (
-                <p style={{ color: '#f87171', fontSize: '0.9rem' }}>목록을 불러오지 못했습니다.</p>
+                <p style={{ color: 'var(--feed-text-secondary)', fontSize: '0.9rem' }}>목록을 불러오지 못했습니다.</p>
               )}
               {load === 'ok' && items.length === 0 && (
-                <p className="feed-post-meta" style={{ margin: '0.5rem 0' }}>등록된 프로젝트가 없습니다.</p>
+                <p className="feed-post-meta" style={{ margin: '0.5rem 0' }}>
+                  {listScope === 'liked'
+                    ? '좋아요한 프로젝트가 없습니다.'
+                    : listScope === 'mine'
+                      ? '등록한 프로젝트가 없습니다.'
+                      : '등록된 프로젝트가 없습니다.'}
+                </p>
               )}
 
               {load === 'ok' &&
@@ -893,13 +967,22 @@ export default function TrophyModal({ open, onClose }) {
                 }
               `}</style>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 16,
+                  minWidth: 0,
+                  /* 우측 첫 줄(트로피 등급) 높이만큼 — 이미지 상단이 프로젝트 제목과 비슷한 위치 */
+                  marginTop: 'clamp(1.75rem, 2.85vw, 2.6rem)',
+                }}
+              >
                 <div
                   style={{
                     position: 'relative',
                     borderRadius: 14,
                     overflow: 'hidden',
-                    background: '#0f172a',
+                    background: 'var(--feed-bg-header)',
                     minHeight: 220,
                   }}
                 >
@@ -919,13 +1002,13 @@ export default function TrophyModal({ open, onClose }) {
                         href={activeSlide.href}
                         target="_blank"
                         rel="noopener noreferrer"
-                        style={{ color: '#93c5fd', fontWeight: 600, padding: 24, textAlign: 'center' }}
+                        style={{ color: 'var(--feed-accent)', fontWeight: 600, padding: 24, textAlign: 'center' }}
                       >
                         영상 열기 (새 탭)
                       </a>
                     )}
                     {activeSlide?.type === 'placeholder' && (
-                      <span style={{ color: '#94a3b8', fontSize: '3rem' }}>📁</span>
+                      <span style={{ color: 'var(--feed-muted)', fontSize: '3rem' }}>📁</span>
                     )}
                   </div>
                 </div>
@@ -976,17 +1059,17 @@ export default function TrophyModal({ open, onClose }) {
                             height: 52,
                             borderRadius: 8,
                             overflow: 'hidden',
-                            border: carouselIdx === i ? '2px solid #3b82f6' : `1px solid ${border}`,
+                            border: carouselIdx === i ? `2px solid var(--feed-accent)` : `1px solid ${border}`,
                             padding: 0,
                             cursor: 'pointer',
                             flexShrink: 0,
-                            background: '#0f172a',
+                            background: 'var(--feed-bg-header)',
                           }}
                         >
                           {s.type === 'img' ? (
                             <img src={s.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                           ) : (
-                            <div style={{ fontSize: '0.65rem', color: '#93c5fd', padding: 4 }}>▶ 영상</div>
+                            <div style={{ fontSize: '0.65rem', color: 'var(--feed-accent)', padding: 4 }}>▶ 영상</div>
                           )}
                         </button>
                       ))}
@@ -1022,7 +1105,7 @@ export default function TrophyModal({ open, onClose }) {
               </div>
 
               <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, marginBottom: 6 }}>
                   {TROPHY_SRC[selected.grade] ? (
                     <img src={TROPHY_SRC[selected.grade]} alt="" style={{ width: 40, height: 40, objectFit: 'contain' }} />
                   ) : (
@@ -1030,7 +1113,7 @@ export default function TrophyModal({ open, onClose }) {
                       🏆
                     </span>
                   )}
-                  <span style={{ fontSize: '1.42rem', fontWeight: 800, lineHeight: 1.2, letterSpacing: '-0.02em' }}>
+                  <span style={{ fontSize: '1.05rem', fontWeight: 800, lineHeight: 1.2, letterSpacing: '-0.02em', color: 'var(--feed-text-secondary)' }}>
                     {GRADE_LABEL[selected.grade] || '트로피'}
                   </span>
                 </div>
@@ -1047,7 +1130,7 @@ export default function TrophyModal({ open, onClose }) {
                   <h3
                     style={{
                       margin: 0,
-                      fontSize: '1.05rem',
+                      fontSize: '1.34rem',
                       fontWeight: 800,
                       lineHeight: 1.3,
                       color: 'var(--feed-text-primary)',
@@ -1094,7 +1177,7 @@ export default function TrophyModal({ open, onClose }) {
                 {(selected.github_url || selected.deploy_url || selected.start_date || selected.end_date) && (
                   <div
                     style={{
-                      background: '#f1f5f9',
+                      background: 'var(--feed-bg-page)',
                       border: `1px solid ${border}`,
                       borderRadius: 12,
                       padding: '10px 12px',
@@ -1118,7 +1201,7 @@ export default function TrophyModal({ open, onClose }) {
                             padding: '4px 8px 4px 5px',
                             borderRadius: 999,
                             border: `1px solid ${border}`,
-                            background: '#fff',
+                            background: 'var(--feed-bg-card)',
                             textDecoration: 'none',
                             color: 'inherit',
                             maxWidth: '100%',
@@ -1157,7 +1240,7 @@ export default function TrophyModal({ open, onClose }) {
                             padding: '4px 8px 4px 5px',
                             borderRadius: 999,
                             border: `1px solid ${border}`,
-                            background: '#fff',
+                            background: 'var(--feed-bg-card)',
                             textDecoration: 'none',
                             color: 'inherit',
                             maxWidth: '100%',
@@ -1235,7 +1318,7 @@ export default function TrophyModal({ open, onClose }) {
                         cursor: 'pointer',
                         fontSize: '0.78rem',
                         fontWeight: 700,
-                        color: '#2563eb',
+                        color: 'var(--feed-accent)',
                         padding: '4px 6px',
                       }}
                     >
@@ -1275,7 +1358,7 @@ export default function TrophyModal({ open, onClose }) {
                         borderRadius: '50%',
                         overflow: 'hidden',
                         flexShrink: 0,
-                        background: '#e2e8f0',
+                        background: 'var(--feed-bg-page)',
                         border: `1px solid ${border}`,
                       }}
                     >
@@ -1319,8 +1402,8 @@ export default function TrophyModal({ open, onClose }) {
                                     height: 26,
                                     borderRadius: '50%',
                                     border: 'none',
-                                    background: '#0f172a',
-                                    color: '#fff',
+                                    background: 'var(--feed-bg-header)',
+                                    color: 'var(--feed-text-on-header)',
                                     cursor: 'pointer',
                                     fontSize: '1rem',
                                     lineHeight: 1,
@@ -1346,7 +1429,7 @@ export default function TrophyModal({ open, onClose }) {
                                     overflow: 'hidden',
                                     border: `1px solid ${border}`,
                                     flexShrink: 0,
-                                    background: '#f1f5f9',
+                                    background: 'var(--feed-bg-page)',
                                   }}
                                 >
                                   {c.avatar_url ? (
@@ -1421,8 +1504,8 @@ export default function TrophyModal({ open, onClose }) {
                       padding: '0 18px',
                       borderRadius: 999,
                       border: 'none',
-                      background: !user?.user_id || commentSubmitting ? '#94a3b8' : '#2563eb',
-                      color: '#fff',
+                      background: !user?.user_id || commentSubmitting ? 'var(--feed-muted)' : 'var(--feed-accent)',
+                      color: 'var(--feed-text-on-header)',
                       cursor: !user?.user_id || commentSubmitting ? 'not-allowed' : 'pointer',
                       fontWeight: 700,
                       fontSize: '0.82rem',
@@ -1495,7 +1578,7 @@ export default function TrophyModal({ open, onClose }) {
                             borderRadius: '50%',
                             overflow: 'hidden',
                             flexShrink: 0,
-                            background: '#e2e8f0',
+                            background: 'var(--feed-bg-page)',
                             border: `1px solid ${border}`,
                           }}
                         >
@@ -1577,7 +1660,7 @@ export default function TrophyModal({ open, onClose }) {
             position: 'fixed',
             inset: 0,
             zIndex: 13500,
-            background: 'rgba(15, 28, 54, 0.55)',
+            background: 'var(--feed-overlay, rgba(15, 28, 54, 0.55))',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1597,7 +1680,7 @@ export default function TrophyModal({ open, onClose }) {
               background: 'var(--feed-bg-card, #fff)',
               borderRadius: 14,
               padding: '20px 22px',
-              boxShadow: '0 24px 64px rgba(0,0,0,0.35)',
+              boxShadow: 'var(--feed-shadow, 0 24px 64px rgba(0,0,0,0.35))',
               border: '1px solid var(--feed-border, rgba(0,0,0,0.08))',
             }}
             onClick={(e) => e.stopPropagation()}
@@ -1638,7 +1721,7 @@ export default function TrophyModal({ open, onClose }) {
                   borderRadius: 10,
                   border: 'none',
                   background: '#dc2626',
-                  color: '#fff',
+                  color: 'var(--feed-text-on-header)',
                   fontWeight: 700,
                   cursor: deleteSubmitting ? 'not-allowed' : 'pointer',
                 }}

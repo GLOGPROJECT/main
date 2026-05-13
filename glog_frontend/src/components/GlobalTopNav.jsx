@@ -11,7 +11,6 @@ const BACKEND_URL = 'http://localhost:4000';
 /** `/`, `/globe`, `/feed` 등에서 동일한 상단 메뉴 */
 export default function GlobalTopNav() {
   const { user, logout } = useAuth();
-  const { openTrophyModal, isTrophyModalOpen } = useTrophyModal();
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const isLoggedIn = Boolean(user);
@@ -79,21 +78,19 @@ export default function GlobalTopNav() {
         </NavLink>
         <NavLink
           to="/feed"
+          state={{ feedRouteEnter: true }}
           className={({ isActive }) =>
             `gtn-link${isActive || pathname.startsWith('/tag/') ? ' gtn-active' : ''}`
           }
         >
           피드
         </NavLink>
-        <button
-          type="button"
-          className={`gtn-link${isTrophyModalOpen ? ' gtn-active' : ''}`}
-          onClick={() => openTrophyModal()}
-        >
+        <NavLink to="/globe" state={{ openTrophy: true }} className="gtn-link">
           트로피
-        </button>
-        <a href="#shop" className="gtn-link">
+        </NavLink>
+        <NavLink to="/globe" state={{ openShop: true }} className="gtn-link">
           상점
+        </NavLink>
         </a>
         {isLoggedIn && (
           <button

@@ -9,6 +9,7 @@ const optionalAuthenticate = require('../auth/optionalAuthMiddleware');
 const {
   listUserProjectsWithTrophies,
   listCommunityProjectsWithTrophies,
+  listMyLikedProjectsWithTrophies,
   listProjectComments,
   createProjectComment,
   deleteProjectComment,
@@ -58,6 +59,23 @@ router.get('/me/today-count', authenticate, async (req, res) => {
     return res.json({ count, max, remaining: Math.max(0, max - count) });
   } catch (err) {
     console.error('[ProjectTodayCount Error]', err.message);
+    return res.status(500).json({ message: '서버 오류가 발생했습니다.' });
+  }
+});
+
+// GET /api/projects/me/liked — 내가 좋아요한 트로피 프로젝트
+router.get('/me/liked', authenticate, async (req, res) => {
+  try {
+    const r = await listMyLikedProjectsWithTrophies(req.user.userId, {
+      last_trophy_id: req.query.last_trophy_id,
+      limit: req.query.limit,
+    });
+    return res.json(r);
+  } catch (err) {
+    if (err.code === 'INVALID_CURSOR') {
+      return res.status(400).json({ message: '잘못된 커서입니다.' });
+    }
+    console.error('[ProjectsMeLiked Error]', err.message);
     return res.status(500).json({ message: '서버 오류가 발생했습니다.' });
   }
 });

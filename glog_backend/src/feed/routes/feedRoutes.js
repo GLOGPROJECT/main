@@ -9,6 +9,7 @@ const router = express.Router();
 router.get('/', optionalAuthenticate, feedController.listFeed);
 router.get('/following/members', authenticate, feedController.listFollowingMembers);
 router.get('/following', authenticate, feedController.listFollowingFeed);
+router.get('/user/:userId/likes', optionalAuthenticate, feedController.listUserLikedFeed);
 router.get('/user/:userId', optionalAuthenticate, feedController.listUserFeed);
 
 router.get('/suggested-users', authenticate, feedController.listSuggestedUsers);
