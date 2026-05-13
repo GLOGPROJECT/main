@@ -41,6 +41,19 @@
   box-sizing: border-box;
 }
 
+@keyframes feed-route-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.feed-app.feed-app--route-enter {
+  animation: feed-route-fade-in 0.42s ease-out;
+}
+
 .feed-header {
   display: flex;
   align-items: center;
@@ -1155,6 +1168,38 @@ button.feed-post-author-link-btn {
 .feed-user-page-header-text {
   min-width: 0;
   flex: 1;
+}
+
+.feed-user-page-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1rem;
+  margin-top: 0.45rem;
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--feed-border);
+}
+
+.feed-user-page-tab {
+  margin: 0;
+  padding: 0.35rem 0.05rem 0.5rem;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: none;
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: var(--feed-text-secondary);
+  font-weight: 500;
+}
+
+.feed-user-page-tab:hover {
+  color: var(--feed-text-primary);
+}
+
+.feed-user-page-tab--active {
+  color: var(--feed-accent);
+  border-bottom-color: var(--feed-accent);
+  font-weight: 700;
 }
 
 .feed-user-back-btn {

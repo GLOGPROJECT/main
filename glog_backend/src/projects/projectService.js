@@ -53,6 +53,34 @@ async function commentCountsByProjectIds(projectIds) {
   }
 }
 
+function decideTrophyGrade(likeCount, commentCount) {
+  if (Number(likeCount) >= 2 && Number(commentCount) >= 1) return 'gold';
+  if (Number(likeCount) >= 1) return 'silver';
+  return 'bronze';
+}
+
+async function recomputeTrophyGradeByProjectId(projectId, tx = prisma) {
+  const pid = Number(projectId);
+  if (!Number.isFinite(pid) || pid <= 0) return null;
+  const trophy = await tx.trophy.findUnique({
+    where: { project_id: pid },
+    select: { trophies_id: true, grade: true, like_count: true },
+  });
+  if (!trophy) return null;
+
+  const commentCount = await tx.projectComment.count({
+    where: { project_id: pid, is_deleted: false },
+  });
+  const nextGrade = decideTrophyGrade(trophy.like_count, commentCount);
+  if (nextGrade !== trophy.grade) {
+    await tx.trophy.update({
+      where: { trophies_id: trophy.trophies_id },
+      data: { grade: nextGrade },
+    });
+  }
+  return nextGrade;
+}
+
 /**
  * @param {number} userId
  * @param {number|null} viewerId
@@ -198,6 +226,117 @@ async function listCommunityProjectsWithTrophies(viewerId, sortMode = 'latest') 
       avatar_url: c.user?.avatar_url ?? null,
     })),
   }));
+}
+
+/** 내가 좋아요한 트로피 프로젝트 (좋아요 누른 시각 최신순, 커서 페이지네이션) */
+async function listMyLikedProjectsWithTrophies(viewerId, { last_trophy_id, limit: limitRaw } = {}) {
+  const uid = Number(viewerId);
+  if (!Number.isFinite(uid) || uid <= 0) return { items: [], nextCursor: null };
+
+  let lim = parseInt(limitRaw, 10);
+  if (Number.isNaN(lim) || lim < 1) lim = 50;
+  lim = Math.min(lim, 50);
+
+  let trophyCursorWhere = {};
+  if (last_trophy_id !== undefined && last_trophy_id !== null && last_trophy_id !== '') {
+    const lid = parseInt(last_trophy_id, 10);
+    if (Number.isNaN(lid)) {
+      const e = new Error('INVALID_CURSOR');
+      e.code = 'INVALID_CURSOR';
+      throw e;
+    }
+    const anchorLike = await prisma.trophyLike.findFirst({
+      where: { user_id: uid, trophy_id: lid },
+      select: { created_at: true, trophy_id: true },
+    });
+    if (!anchorLike) {
+      const e = new Error('INVALID_CURSOR');
+      e.code = 'INVALID_CURSOR';
+      throw e;
+    }
+    trophyCursorWhere = {
+      OR: [
+        { created_at: { lt: anchorLike.created_at } },
+        {
+          AND: [{ created_at: anchorLike.created_at }, { trophy_id: { lt: anchorLike.trophy_id } }],
+        },
+      ],
+    };
+  }
+
+  const take = lim + 1;
+  const likeRows = await prisma.trophyLike.findMany({
+    where: {
+      user_id: uid,
+      trophy: { project: { is_deleted: false } },
+      ...trophyCursorWhere,
+    },
+    orderBy: [{ created_at: 'desc' }, { trophy_id: 'desc' }],
+    take,
+    include: {
+      trophy: {
+        include: {
+          project: {
+            include: {
+              project_tags: true,
+              user: { select: { user_id: true, nickname: true, avatar_url: true } },
+              contributors: {
+                include: { user: { select: { user_id: true, nickname: true, avatar_url: true } } },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  const hasMore = likeRows.length > lim;
+  const slice = hasMore ? likeRows.slice(0, lim) : likeRows;
+
+  const projectsNeedingCounts = slice
+    .map((lr) => lr.trophy?.project)
+    .filter((p) => p && !p.is_deleted);
+  const commentCounts = await commentCountsByProjectIds(projectsNeedingCounts.map((p) => p.projects_id));
+
+  const items = slice
+    .map((lr) => {
+      const tr = lr.trophy;
+      const proj = tr?.project;
+      if (!tr || !proj || proj.is_deleted) return null;
+      return {
+        project_id: proj.projects_id,
+        trophy_id: tr.trophies_id,
+        owner_user_id: proj.user_id,
+        author_nickname: proj.user?.nickname ?? '',
+        author_avatar_url: proj.user?.avatar_url ?? null,
+        title: proj.title,
+        description: proj.description,
+        github_url: proj.github_url,
+        deploy_url: proj.deploy_url,
+        image_url: proj.image_url,
+        video_url: proj.video_url,
+        techStacks: proj.project_tags.map((t) => t.tag_name),
+        dateRange: formatDateRange(proj.start_date, proj.end_date),
+        start_date: proj.start_date,
+        end_date: proj.end_date,
+        timeAgo: timeAgoFromDate(new Date(proj.created_at)),
+        updated_at: proj.updated_at,
+        grade: tr.grade,
+        likes: tr.like_count,
+        liked_by_me: true,
+        comments: commentCounts.get(proj.projects_id) ?? 0,
+        contributors: (proj.contributors || []).map((c) => ({
+          user_id: c.user_id,
+          nickname: c.user?.nickname ?? '',
+          avatar_url: c.user?.avatar_url ?? null,
+        })),
+        liked_at: lr.created_at.toISOString(),
+      };
+    })
+    .filter(Boolean);
+
+  const nextCursor = hasMore && slice.length ? slice[slice.length - 1].trophy_id : null;
+  return { items, nextCursor };
 }
 
 function startOfUtcDay(d = new Date()) {
@@ -499,19 +638,21 @@ async function toggleTrophyLike(viewerId, trophyId) {
         where: { trophies_id: trophyId },
         data: { like_count: nextCount },
       });
+      await recomputeTrophyGradeByProjectId(trophy.project_id, tx);
     });
     return { ok: true, liked: false, like_count: nextCount };
   }
 
-  await prisma.$transaction([
-    prisma.trophyLike.create({
+  await prisma.$transaction(async (tx) => {
+    await tx.trophyLike.create({
       data: { user_id: viewerId, trophy_id: trophyId },
-    }),
-    prisma.trophy.update({
+    });
+    await tx.trophy.update({
       where: { trophies_id: trophyId },
       data: { like_count: { increment: 1 } },
-    }),
-  ]);
+    });
+    await recomputeTrophyGradeByProjectId(trophy.project_id, tx);
+  });
   return { ok: true, liked: true, like_count: trophy.like_count + 1 };
 }
 
@@ -570,6 +711,7 @@ async function createProjectComment(userId, projectId, rawContent) {
     data: { project_id: pid, user_id: userId, content },
     include: { user: { select: { user_id: true, nickname: true, avatar_url: true } } },
   });
+  await recomputeTrophyGradeByProjectId(pid);
 
   return {
     ok: true,
@@ -607,6 +749,7 @@ async function deleteProjectComment(userId, projectId, commentId) {
     where: { id: cid },
     data: { is_deleted: true },
   });
+  await recomputeTrophyGradeByProjectId(pid);
 
   return { ok: true, project_id: pid, id: cid };
 }
@@ -621,6 +764,7 @@ async function countTodayProjectsForUser(userId) {
 module.exports = {
   listUserProjectsWithTrophies,
   listCommunityProjectsWithTrophies,
+  listMyLikedProjectsWithTrophies,
   listProjectComments,
   createProjectComment,
   deleteProjectComment,

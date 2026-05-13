@@ -87,7 +87,7 @@ export function serverPostToCardPost(dto) {
 }
 
 /**
- * @param {'all'|'following'|'tag'|'user'|'anonymous'} feedType
+ * @param {'all'|'following'|'tag'|'user'|'user_likes'|'anonymous'} feedType
  * @param {number|null|undefined} cursor last_post_id
  * @param {string} [tagSlug]
  * @param {number} [userId] — feedType === 'user' 일 때
@@ -106,6 +106,7 @@ export async function fetchFeedFromApi({
   if (feedType === 'following') path = '/feed/following';
   else if (feedType === 'tag') path = `/tag/${encodeURIComponent(tagSlug || '')}`;
   else if (feedType === 'user') path = `/feed/user/${encodeURIComponent(String(userId ?? ''))}`;
+  else if (feedType === 'user_likes') path = `/feed/user/${encodeURIComponent(String(userId ?? ''))}/likes`;
 
   const params = { limit };
   if (cursor != null) params.last_post_id = cursor;

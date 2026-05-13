@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, Outlet, useNavigate, useSearchParams } from 'react-router-dom';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Link, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/hooks/useAuth';
 import api from '../../api/axios';
@@ -33,6 +33,9 @@ function readSubscribedTagSlugsFromStorage() {
 function FeedLayoutInner() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const feedAppRef = useRef(null);
+  const initialFeedRouteStateRef = useRef(location.state);
   const qc = useQueryClient();
   const { theme, toggleTheme } = useFeedTheme();
   const [composeOpen, setComposeOpen] = useState(false);
@@ -193,8 +196,21 @@ function FeedLayoutInner() {
 
   const outletCtx = useMemo(() => ({ setComposeOpen: openComposeNew }), [openComposeNew]);
 
+  useLayoutEffect(() => {
+    const st = initialFeedRouteStateRef.current;
+    if (st?.feedRouteEnter === true) {
+      feedAppRef.current?.classList.add('feed-app--route-enter');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (location.state?.feedRouteEnter !== true) return;
+    const path = `${location.pathname}${location.search || ''}`;
+    navigate(path, { replace: true, state: {} });
+  }, [location.state, location.pathname, location.search, navigate]);
+
   return (
-    <div className="feed-app">
+    <div ref={feedAppRef} className="feed-app">
       <FeedNavEffects />
       <GlobalTopNav />
 

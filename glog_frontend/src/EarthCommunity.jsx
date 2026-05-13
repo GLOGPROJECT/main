@@ -40,11 +40,14 @@ import AvatarViewerModal from "./avatar-viewer/AvatarViewerModal";
 import PostCard, { HeartIcon } from "./feed/components/PostCard";
 import CommentSection from "./feed/components/CommentSection";
 import { isAnonymousPost } from "./feed/utils/anonAvatar";
+import { getTagPillColors } from "./feed/utils/tagPillColors";
 import { fetchPostById, togglePostLike, toggleTrophyLike } from "./feed/api/feedApi";
+import { fetchSearchAutocomplete } from "./feed/api/searchApi";
 import { streakBadgeEmoji } from "./utils/streakBadgeEmoji";
 import ProjectRegisterModal from "./feed/components/ProjectRegisterModal";
 import { LoginModalProvider } from "./feed/auth/LoginModalContext";
 import { useTrophyModal } from "./feed/trophy/TrophyModalContext";
+import { useFeedTheme } from "./feed/theme/ThemeContext";
 import * as THREE from "three";
 
 // Html 라벨을 body에 붙여 canvas 상위 overflow에 잘리지 않게 함
@@ -406,6 +409,16 @@ function projectDescToBulletLines(desc) {
   return [s];
 }
 
+function normalizeGlobeSearchKeyword(raw) {
+  return String(raw ?? "").trim().slice(0, 100);
+}
+
+function buildSearchSnippet(raw) {
+  const txt = String(raw ?? "").replace(/\s+/g, " ").trim();
+  if (!txt) return "";
+  return txt.length > 90 ? `${txt.slice(0, 90)}…` : txt;
+}
+
 function buildProjectEditDraftFromPreview(p) {
   if (!p?.id) return null;
   const contributors = Array.isArray(p.contributors)
@@ -461,6 +474,47 @@ function mapProjectsApiToTrophyList(data) {
   }));
 }
 
+/** 패널용: 타임스탬프(ms) → 상대 시각 문자열 */
+function panelTimeAgoFromTs(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return '';
+  const diffMin = Math.max(0, Math.floor((Date.now() - ms) / 60000));
+  if (diffMin < 60) return `${diffMin}분 전`;
+  const h = Math.floor(diffMin / 60);
+  if (h < 24) return `${h}시간 전`;
+  const d = Math.floor(h / 24);
+  return `${d}일 전`;
+}
+
+/** 좋아요 탭: 피드 raw + 트로피 API row → 시간순 병합 엔트리 */
+function buildMergedLikeEntries(feedPosts, trophyRows) {
+  const fp = Array.isArray(feedPosts) ? feedPosts : [];
+  const tr = Array.isArray(trophyRows) ? trophyRows : [];
+  const feedItems = fp.map((p) => {
+    const likedAt = p.liked_at ? Date.parse(p.liked_at) : 0;
+    return {
+      kind: 'feed',
+      likedAt,
+      id: `f_${p.post_id}`,
+      postId: p.post_id,
+      content: String(p.content || '').trim(),
+      tags: Array.isArray(p.hashtags)
+        ? p.hashtags.map((h) => String(h?.name || '').trim()).filter(Boolean)
+        : [],
+      likes: Number(p.like_count ?? 0),
+      comments: Number(p.comment_count ?? 0),
+      isLiked: Boolean(p.isLiked),
+      timeAgo: panelTimeAgoFromTs(likedAt),
+    };
+  });
+  const trophyMapped = mapProjectsApiToTrophyList({ items: tr }).map((t, idx) => ({
+    kind: 'trophy',
+    likedAt: tr[idx]?.liked_at ? Date.parse(tr[idx].liked_at) : 0,
+    id: `t_${t.trophyId}`,
+    trophy: t,
+  }));
+  return [...feedItems, ...trophyMapped].sort((a, b) => b.likedAt - a.likedAt);
+}
+
 const trophyFeedCardStyle = {
   display: 'flex',
   gap: 10,
@@ -468,8 +522,8 @@ const trophyFeedCardStyle = {
   padding: 10,
   marginBottom: 8,
   borderRadius: 12,
-  border: '1px solid rgba(0,0,0,0.08)',
-  background: 'rgba(255,255,255,0.96)',
+  border: '1px solid var(--feed-border)',
+  background: 'var(--feed-bg-card)',
   cursor: 'pointer',
   outline: 'none',
 };
@@ -480,7 +534,7 @@ const trophyFeedCardThumbWrap = {
   flexShrink: 0,
   borderRadius: '50%',
   overflow: 'hidden',
-  background: '#0f172a',
+  background: 'var(--feed-bg-header)',
 };
 
 const PROJECT_MODAL_TAG_PALETTE = [
@@ -541,6 +595,16 @@ export default function EarthCommunity() {
   const globeProjDeleteDedupRef = useRef(new Set());
   const [trophyRefreshKey, setTrophyRefreshKey] = useState(0);
   const [earthPanelPostListRefreshKey, setEarthPanelPostListRefreshKey] = useState(0);
+  const [globeSearchQ, setGlobeSearchQ] = useState("");
+  const [globeSearchDebounced, setGlobeSearchDebounced] = useState("");
+  const [globeSearchOpen, setGlobeSearchOpen] = useState(false);
+  const [globeSearchUsers, setGlobeSearchUsers] = useState([]);
+  const [globeSearchPosts, setGlobeSearchPosts] = useState([]);
+  const [globeSearchProjects, setGlobeSearchProjects] = useState([]);
+  const [globeSearchResultOpen, setGlobeSearchResultOpen] = useState(false);
+  const [globeSearchResultPosts, setGlobeSearchResultPosts] = useState([]);
+  const [globeSearchResultProjects, setGlobeSearchResultProjects] = useState([]);
+  const globeSearchWrapRef = useRef(null);
   const [globeModalPost, setGlobeModalPost] = useState(null);
   const [globeModalLoad, setGlobeModalLoad] = useState("idle");
   const globeModalBodyRef = useRef(null);
@@ -554,8 +618,115 @@ export default function EarthCommunity() {
   // 프로필 페이지 이동을 위한 navigate, 로그인 유저 정보
   const navigate = useNavigate();
   const location = useLocation();
+  /** 피드 등에서 진입 시 location.state (effect에서 clear 되기 전 스냅샷) */
+  const initialRouteStateRef = useRef(location.state);
+  const earthRootRef = useRef(null);
+  const wasTrophyModalOpenRef = useRef(false);
   const { user: me, updateUser, logout } = useAuth();
-  const { openTrophyModal } = useTrophyModal();
+  const { theme, toggleTheme } = useFeedTheme();
+  const { openTrophyModal, closeTrophyModal, isTrophyModalOpen } = useTrophyModal();
+
+  const globeChrome = useMemo(() => {
+    const L = theme === "light";
+    return {
+      wrapperBg: L
+        ? "radial-gradient(circle at 50% 48%, #e8edf7 0%, #d8e2ef 52%, #b8c9dc 100%)"
+        : "radial-gradient(circle at 50% 50%, #0b1026 0%, #04060f 100%)",
+      wrapperFg: L ? "#0f172a" : "#ffffff",
+      navBg: L ? "rgba(255,255,255,0.9)" : "rgba(11, 16, 38, 0.75)",
+      navBorder: L ? "1px solid rgba(15,23,42,0.1)" : "1px solid rgba(255,255,255,0.1)",
+      logoColor: L ? "#0f172a" : "#ffffff",
+      navVarFg: L ? "#334155" : "#ffffff",
+      navVarFgHover: L ? "#0f172a" : "rgba(255,255,255,0.88)",
+      navVarActive: "#3b82f6",
+      searchPh: L ? "#64748b" : "#94a3b8",
+      notifRing: "#ffffff",
+      searchBar: {
+        display: "flex",
+        gap: 8,
+        alignItems: "center",
+        borderRadius: 10,
+        padding: "6px",
+        background: L ? "rgba(255,255,255,0.96)" : "rgba(30, 41, 59, 0.92)",
+        border: L ? "1px solid rgba(15,23,42,0.14)" : "1px solid rgba(148,163,184,0.28)",
+        boxShadow: L ? "0 8px 20px rgba(15,23,42,0.1)" : "0 8px 28px rgba(0,0,0,0.45)",
+      },
+      searchInput: {
+        flex: 1,
+        minWidth: 0,
+        borderRadius: 8,
+        padding: "8px 10px",
+        fontSize: "0.82rem",
+        color: L ? "#0f1c36" : "#e2e8f0",
+        background: L ? "#ffffff" : "#0f172a",
+        border: L ? "1px solid rgba(15,23,42,0.12)" : "1px solid rgba(100,116,139,0.35)",
+      },
+      searchSuggest: {
+        position: "absolute",
+        left: 0,
+        right: 0,
+        bottom: "calc(100% + 8px)",
+        maxHeight: 250,
+        overflowY: "auto",
+        borderRadius: 10,
+        padding: "8px 0",
+        background: L ? "rgba(248,250,252,0.98)" : "rgba(15,23,42,0.97)",
+        border: L ? "1px solid rgba(15,23,42,0.12)" : "1px solid rgba(148,163,184,0.22)",
+        boxShadow: L ? "0 8px 24px rgba(0,0,0,0.15)" : "0 8px 28px rgba(0,0,0,0.55)",
+      },
+      searchSectionTitle: {
+        fontSize: "0.72rem",
+        fontWeight: 700,
+        padding: "4px 6px",
+        color: L ? "#64748b" : "#94a3b8",
+      },
+      searchItemBtn: {
+        width: "100%",
+        textAlign: "left",
+        background: "transparent",
+        border: "none",
+        borderRadius: 8,
+        fontSize: "0.78rem",
+        padding: "7px 8px",
+        cursor: "pointer",
+        color: L ? "#0f172a" : "#e2e8f0",
+      },
+      searchItemHoverBg: L ? "rgba(15,23,42,0.06)" : "rgba(148,163,184,0.12)",
+      searchResultPopup: {
+        position: "absolute",
+        right: 14,
+        bottom: 74,
+        width: 356,
+        maxHeight: 300,
+        display: "flex",
+        flexDirection: "column",
+        borderRadius: 12,
+        zIndex: 23,
+        overflow: "hidden",
+        background: L ? "rgba(248,250,252,0.98)" : "rgba(15,23,42,0.97)",
+        border: L ? "1px solid rgba(15,23,42,0.16)" : "1px solid rgba(148,163,184,0.22)",
+        boxShadow: L ? "0 10px 28px rgba(0,0,0,0.18)" : "0 10px 32px rgba(0,0,0,0.55)",
+      },
+      searchResultHeader: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: "8px 10px",
+        borderBottom: L ? "1px solid rgba(15,23,42,0.1)" : "1px solid rgba(148,163,184,0.18)",
+        background: L ? "rgba(241,245,249,0.95)" : "rgba(30,41,59,0.95)",
+        color: L ? "#0f172a" : "#e2e8f0",
+      },
+      searchResultBody: {
+        padding: "8px",
+        overflowY: "auto",
+        maxHeight: 248,
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+        background: L ? "transparent" : "rgba(15,23,42,0.4)",
+      },
+    };
+  }, [theme]);
   // 소켓/DmPanel에서 내 userId 식별용 — GlobalTopNav가 없는 globe 페이지에서 직접 세팅
   if (me) window.__myUserId = me.user_id;
 
@@ -631,14 +802,20 @@ export default function EarthCommunity() {
   }, [me?.user_id, updateUser]);
 
   const globeUsers = useMemo(() => {
-    if (!me?.user_id) return apiGlobeUsers;
+    const normalized = apiGlobeUsers.map((u) => ({
+      ...u,
+      avatar: u.avatar || u.model_url || pickAvatarByUserId(u.id),
+      // API 목록에 내 마킹이 있어도 isMe가 없으면 패널에서 팔로우로 잘못 표시됨
+      isMe: Boolean(me?.user_id != null && Number(u.id) === Number(me.user_id)),
+    }));
+    if (!me?.user_id) return normalized;
     // API 결과에 내가 없으면 직접 추가 (id는 숫자/문자열 모두 대응)
-    const hasMe = apiGlobeUsers.some((u) => Number(u.id) === Number(me.user_id));
-    if (hasMe) return apiGlobeUsers;
+    const hasMe = normalized.some((u) => Number(u.id) === Number(me.user_id));
+    if (hasMe) return normalized;
     const lat = parseGlobeCoord(me.globe_lat, 37.56);
     const lon = parseGlobeCoord(me.globe_lon, 126.97);
     // globe_lat/lon이 없으면 지구본에 표시하지 않음
-    if (!me.globe_lat || !me.globe_lon) return apiGlobeUsers;
+    if (!me.globe_lat || !me.globe_lon) return normalized;
     const meUser = {
       id: String(me.user_id),
       name: me.nickname || me.username || me.name || `user-${me.user_id}`,
@@ -651,7 +828,7 @@ export default function EarthCommunity() {
       isMe: true,
       status: me.status || "offline",
     };
-    return [meUser, ...apiGlobeUsers];
+    return [meUser, ...normalized];
   }, [me, apiGlobeUsers]);
 
   const buildMePanelUser = useMemo(() => {
@@ -663,6 +840,7 @@ export default function EarthCommunity() {
       name: me.nickname || me.username || me.name || `user-${me.user_id}`,
       bio: me.bio || "",
       color: "#4e9af1",
+      avatar: me.model_url || pickAvatarByUserId(me.user_id),
       avatar_url: me.avatar_url || null,
       lat,
       lon,
@@ -670,6 +848,159 @@ export default function EarthCommunity() {
       isMe: true,
     };
   }, [me]);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setGlobeSearchDebounced(normalizeGlobeSearchKeyword(globeSearchQ));
+    }, 260);
+    return () => clearTimeout(t);
+  }, [globeSearchQ]);
+
+  useEffect(() => {
+    const q = globeSearchDebounced;
+    if (!globeSearchOpen || !q) {
+      setGlobeSearchUsers([]);
+      setGlobeSearchPosts([]);
+      setGlobeSearchProjects([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const [auto, projectsRes] = await Promise.all([
+          fetchSearchAutocomplete(q).catch(() => ({ users: [], suggestions: [] })),
+          api.get("/projects/community", { params: { sort: "latest" } }).catch(() => ({ data: { items: [] } })),
+        ]);
+        if (cancelled) return;
+        const users = Array.isArray(auto?.users) ? auto.users.slice(0, 6) : [];
+        const posts = (Array.isArray(auto?.suggestions) ? auto.suggestions : [])
+          .filter((s) => s && s.type === "post" && s.post_id != null)
+          .slice(0, 6);
+        const rows = Array.isArray(projectsRes?.data?.items) ? projectsRes.data.items : [];
+        const lowQ = q.toLowerCase();
+        const projects = rows
+          .filter((row) => {
+            const title = String(row?.title ?? "").toLowerCase();
+            const desc = String(row?.description ?? "").toLowerCase();
+            const author = String(row?.author_nickname ?? "").toLowerCase();
+            return title.includes(lowQ) || desc.includes(lowQ) || author.includes(lowQ);
+          })
+          .slice(0, 6)
+          .map((row) => ({
+            id: row.project_id,
+            title: String(row.title ?? "").trim() || "제목 없음",
+            author: String(row.author_nickname ?? "").trim(),
+            snippet: buildSearchSnippet(row.description),
+          }));
+        setGlobeSearchUsers(users);
+        setGlobeSearchPosts(posts);
+        setGlobeSearchProjects(projects);
+      } catch {
+        if (cancelled) return;
+        setGlobeSearchUsers([]);
+        setGlobeSearchPosts([]);
+        setGlobeSearchProjects([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [globeSearchDebounced, globeSearchOpen]);
+
+  useEffect(() => {
+    if (!globeSearchOpen) return undefined;
+    const onDocDown = (e) => {
+      if (!globeSearchWrapRef.current?.contains(e.target)) setGlobeSearchOpen(false);
+    };
+    document.addEventListener("mousedown", onDocDown);
+    return () => document.removeEventListener("mousedown", onDocDown);
+  }, [globeSearchOpen]);
+
+  const moveToSearchedUser = useCallback(
+    (rawUser) => {
+      const userId = Number(rawUser?.user_id ?? rawUser?.id);
+      if (!Number.isFinite(userId)) return;
+      const found = globeUsers.find((u) => Number(u.id) === userId);
+      if (found) {
+        markerClickedRef.current = true;
+        setSelectedUser(found);
+        setActiveNav("프로필");
+        dragRef.current.pausedUntil = Date.now() + 4000;
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            snapEarthGroupTowardCamera(earthRef, found.lat, found.lon);
+          });
+        });
+      } else {
+        navigate(`/profile/${userId}`);
+      }
+      setGlobeSearchOpen(false);
+    },
+    [globeUsers, navigate],
+  );
+
+  const openGlobeSearchResults = useCallback(async () => {
+    const q = normalizeGlobeSearchKeyword(globeSearchQ);
+    if (!q) return;
+    try {
+      const [postRes, projectsRes] = await Promise.all([
+        api.get("/search", { params: { type: "post", q, limit: 8 } }).catch(() => ({ data: { posts: [] } })),
+        api.get("/projects/community", { params: { sort: "latest" } }).catch(() => ({ data: { items: [] } })),
+      ]);
+      const posts = (Array.isArray(postRes?.data?.posts) ? postRes.data.posts : []).map((p) => ({
+        id: p.post_id,
+        author: String(p?.user?.nickname ?? "").trim(),
+        snippet: buildSearchSnippet(p.content),
+      }));
+      const lowQ = q.toLowerCase();
+      const projects = mapProjectsApiToTrophyList(projectsRes?.data)
+        .filter((p) => {
+          const title = String(p.title ?? "").toLowerCase();
+          const desc = String(p.desc ?? "").toLowerCase();
+          const author = String(p.authorNickname ?? "").toLowerCase();
+          return title.includes(lowQ) || desc.includes(lowQ) || author.includes(lowQ);
+        })
+        .slice(0, 8);
+      setGlobeSearchResultPosts(posts);
+      setGlobeSearchResultProjects(projects);
+      setGlobeSearchResultOpen(true);
+      setGlobeSearchOpen(false);
+    } catch {
+      setGlobeSearchResultPosts([]);
+      setGlobeSearchResultProjects([]);
+      setGlobeSearchResultOpen(true);
+      setGlobeSearchOpen(false);
+    }
+  }, [globeSearchQ]);
+
+  useLayoutEffect(() => {
+    const st = initialRouteStateRef.current;
+    if (st?.openShop !== true && st?.openMyProfile !== true && st?.openTrophy !== true) return;
+    earthRootRef.current?.classList.add("earth-community-root--route-enter");
+  }, []);
+
+  useEffect(() => {
+    if (location.state?.openShop !== true) return;
+    closeTrophyModal();
+    setShowShop(true);
+    setActiveNav("상점");
+    navigate(location.pathname, { replace: true, state: {} });
+  }, [location.state, location.pathname, navigate, closeTrophyModal]);
+
+  useEffect(() => {
+    if (location.state?.openTrophy !== true) return;
+    setShowShop(false);
+    setActiveNav("트로피");
+    openTrophyModal();
+    navigate(location.pathname, { replace: true, state: {} });
+  }, [location.state, location.pathname, navigate, openTrophyModal]);
+
+  useEffect(() => {
+    if (wasTrophyModalOpenRef.current && !isTrophyModalOpen) {
+      setActiveNav((prev) => (prev === "트로피" ? null : prev));
+    }
+    wasTrophyModalOpenRef.current = isTrophyModalOpen;
+  }, [isTrophyModalOpen]);
 
   useEffect(() => {
     if (location.state?.openMyProfile !== true || !buildMePanelUser) return;
@@ -955,7 +1286,7 @@ export default function EarthCommunity() {
     position: "fixed",
     inset: 0,
     zIndex: 12000,
-    background: "rgba(15, 28, 54, 0.45)",
+    background: "var(--feed-overlay, rgba(15, 28, 54, 0.45))",
   };
   const globePostModalPanelStyle = {
     position: "fixed",
@@ -967,11 +1298,11 @@ export default function EarthCommunity() {
     zIndex: 12001,
     display: "flex",
     flexDirection: "column",
-    background: "var(--feed-surface-elevated, rgba(255,255,255,0.98))",
-    color: "var(--feed-text, #0f172a)",
+    background: "var(--feed-bg-card)",
+    color: "var(--feed-text-primary)",
     borderRadius: 16,
-    boxShadow: "0 12px 40px rgba(0,0,0,0.35)",
-    border: "1px solid var(--feed-border-subtle, rgba(15,23,42,0.12))",
+    boxShadow: "var(--feed-shadow, 0 12px 40px rgba(0,0,0,0.35))",
+    border: "1px solid var(--feed-border)",
     overflow: "hidden",
   };
   const globePostModalHeaderStyle = {
@@ -980,7 +1311,7 @@ export default function EarthCommunity() {
     alignItems: "center",
     justifyContent: "space-between",
     padding: "10px 12px",
-    borderBottom: "1px solid var(--feed-border-subtle, rgba(15,23,42,0.1))",
+    borderBottom: "1px solid var(--feed-border)",
   };
   const globePostModalBodyStyle = {
     flex: 1,
@@ -1007,7 +1338,20 @@ export default function EarthCommunity() {
 
   return (
     <LoginModalProvider isLoggedIn={Boolean(me)}>
-    <div style={wrapperStyle}>
+    <div
+      ref={earthRootRef}
+      style={{
+        ...wrapperStyle,
+        background: globeChrome.wrapperBg,
+        color: globeChrome.wrapperFg,
+        ["--globe-nav-fg"]: globeChrome.navVarFg,
+        ["--globe-nav-fg-hover"]: globeChrome.navVarFgHover,
+        ["--globe-nav-active"]: globeChrome.navVarActive,
+        ["--globe-search-hit-hover"]: globeChrome.searchItemHoverBg,
+        ["--globe-search-ph"]: globeChrome.searchPh,
+        ["--globe-notif-ring"]: globeChrome.notifRing,
+      }}
+    >
       <div style={canvasHostStyle} onClick={handleCanvasClick}>
         <div
           style={canvasWrapStyle}
@@ -1051,18 +1395,29 @@ export default function EarthCommunity() {
       <nav style={{
         ...earthNavbarStyle,
         opacity: selectedUser ? 0 : 1,
-        // 패널 열릴 때 background/backdropFilter도 제거 - opacity:0만으론 렌더링 아티팩트 발생
-        background: selectedUser ? 'transparent' : 'rgba(11, 16, 38, 0.75)',
+        background: selectedUser ? 'transparent' : globeChrome.navBg,
         backdropFilter: selectedUser ? 'none' : 'blur(8px)',
         pointerEvents: selectedUser ? 'none' : 'auto',
         transition: 'opacity 0.3s ease',
+        borderBottom: selectedUser ? 'none' : globeChrome.navBorder,
       }}>
         {/* GLog 로고 - 클릭 시 랜딩 홈으로 이동 */}
-        <div
-          onClick={() => navigate('/')}
-          style={{ fontSize: '2.1rem', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}
-        >
-          GLog 🌍
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div
+            onClick={() => navigate('/')}
+            style={{ fontSize: '2.1rem', fontWeight: 'bold', color: globeChrome.logoColor, cursor: 'pointer' }}
+          >
+            GLog 🌍
+          </div>
+          <button
+            type="button"
+            className="feed-theme-toggle-btn"
+            onClick={toggleTheme}
+            title={theme === 'dark' ? '밝게' : '야간'}
+            aria-label={theme === 'dark' ? '라이트 모드' : '다크 모드'}
+          >
+            {theme === 'dark' ? '☀' : '🌙'}
+          </button>
         </div>
         {/* 메뉴 버튼 목록 - 랜딩과 동일한 항목 */}
         <div style={{ display: 'flex', gap: '40px' }}>
@@ -1083,6 +1438,7 @@ export default function EarthCommunity() {
                       name: me.nickname,
                       bio: me.bio || '',
                       color: '#4e9af1',
+                      avatar: me.model_url || pickAvatarByUserId(me.user_id),
                       avatar_url: me.avatar_url,
                       lat,
                       lon,
@@ -1096,10 +1452,14 @@ export default function EarthCommunity() {
                     });
                   }
                 } else if (item === '피드') {
-                  navigate('/feed');
+                  navigate('/feed', { state: { feedRouteEnter: true } });
                 } else if (item === '트로피') {
+                  setShowShop(false);
+                  setActiveNav('트로피');
                   openTrophyModal();
                 } else if (item === '상점') {
+                  closeTrophyModal();
+                  setActiveNav('상점');
                   setShowShop(true);
                 } else if (item === '로그아웃') {
                   await logout();
@@ -1117,7 +1477,14 @@ export default function EarthCommunity() {
       </nav>
 
       {/* 펫 상점 모달 */}
-      {showShop && <PetShopModal onClose={() => setShowShop(false)} />}
+      {showShop && (
+        <PetShopModal
+          onClose={() => {
+            setShowShop(false);
+            setActiveNav((prev) => (prev === '상점' ? null : prev));
+          }}
+        />
+      )}
 
       {/* 일일 첫 로그인 보상 모달 */}
       {showDailyReward && (
@@ -1163,6 +1530,98 @@ export default function EarthCommunity() {
         }}
         onOpenProject={(p) => setGlobeProjectPreview(p)}
       />
+
+      <div ref={globeSearchWrapRef} style={globeSearchWrapStyle}>
+        {globeSearchOpen && globeSearchDebounced && (globeSearchUsers.length > 0 || globeSearchPosts.length > 0 || globeSearchProjects.length > 0) ? (
+          <div style={globeChrome.searchSuggest}>
+            {globeSearchUsers.length > 0 ? (
+              <div style={globeSearchSectionStyle}>
+                <div style={globeChrome.searchSectionTitle}>유저</div>
+                {globeSearchUsers.map((u) => (
+                  <button
+                    key={`u-${u.user_id}`}
+                    type="button"
+                    style={globeChrome.searchItemBtn}
+                    className="globe-search-hit"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => moveToSearchedUser(u)}
+                  >
+                    {u.nickname}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {globeSearchPosts.length > 0 ? (
+              <div style={globeSearchSectionStyle}>
+                <div style={globeChrome.searchSectionTitle}>피드 게시글</div>
+                {globeSearchPosts.map((p) => (
+                  <button
+                    key={`p-${p.post_id}`}
+                    type="button"
+                    style={globeChrome.searchItemBtn}
+                    className="globe-search-hit"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setGlobePostModalId(String(p.post_id));
+                      setGlobeSearchOpen(false);
+                    }}
+                  >
+                    {p.author_nickname ? `${p.author_nickname} · ` : ""}
+                    {buildSearchSnippet(p.snippet)}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {globeSearchProjects.length > 0 ? (
+              <div style={globeSearchSectionStyle}>
+                <div style={globeChrome.searchSectionTitle}>트로피 프로젝트</div>
+                {globeSearchProjects.map((p) => (
+                  <button
+                    key={`t-${p.id}`}
+                    type="button"
+                    style={globeChrome.searchItemBtn}
+                    className="globe-search-hit"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={async () => {
+                      try {
+                        const { data } = await api.get("/projects/community", { params: { sort: "latest" } });
+                        const found = mapProjectsApiToTrophyList(data).find((x) => Number(x.id) === Number(p.id));
+                        if (found) setGlobeProjectPreview(found);
+                      } catch {
+                        /* ignore */
+                      }
+                      setGlobeSearchOpen(false);
+                    }}
+                  >
+                    {p.author ? `${p.author} · ` : ""}
+                    {p.title}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        <div style={globeChrome.searchBar}>
+          <input
+            type="search"
+            value={globeSearchQ}
+            placeholder="유저/피드/트로피 검색"
+            className="globe-search-input"
+            style={globeChrome.searchInput}
+            onChange={(e) => setGlobeSearchQ(e.target.value)}
+            onFocus={() => setGlobeSearchOpen(true)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void openGlobeSearchResults();
+              }
+            }}
+          />
+          <button type="button" style={globeSearchBtnStyle} onClick={() => void openGlobeSearchResults()}>
+            이동
+          </button>
+        </div>
+      </div>
 
       {globePostModalId ? (
         <div
@@ -1216,6 +1675,67 @@ export default function EarthCommunity() {
         </div>
       ) : null}
 
+      {globeSearchResultOpen ? (
+        <div style={globeChrome.searchResultPopup}>
+          <div style={globeChrome.searchResultHeader}>
+            <span style={{ fontSize: "0.82rem", fontWeight: 700 }}>검색 결과</span>
+            <button
+              type="button"
+              style={globePostModalCloseStyle}
+              aria-label="검색 결과 닫기"
+              onClick={() => setGlobeSearchResultOpen(false)}
+            >
+              ×
+            </button>
+          </div>
+          <div style={globeChrome.searchResultBody}>
+            {globeSearchResultPosts.length > 0 ? (
+              <div style={globeSearchSectionStyle}>
+                <div style={globeChrome.searchSectionTitle}>피드 게시글</div>
+                {globeSearchResultPosts.map((p) => (
+                  <button
+                    key={`rp-${p.id}`}
+                    type="button"
+                    style={globeChrome.searchItemBtn}
+                    className="globe-search-hit"
+                    onClick={() => {
+                      setGlobePostModalId(String(p.id));
+                      setGlobeSearchResultOpen(false);
+                    }}
+                  >
+                    {p.author ? `${p.author} · ` : ""}
+                    {p.snippet || "게시글"}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {globeSearchResultProjects.length > 0 ? (
+              <div style={globeSearchSectionStyle}>
+                <div style={globeChrome.searchSectionTitle}>트로피 프로젝트</div>
+                {globeSearchResultProjects.map((p) => (
+                  <button
+                    key={`rt-${p.id}`}
+                    type="button"
+                    style={globeChrome.searchItemBtn}
+                    className="globe-search-hit"
+                    onClick={() => {
+                      setGlobeProjectPreview(p);
+                      setGlobeSearchResultOpen(false);
+                    }}
+                  >
+                    {p.authorNickname ? `${p.authorNickname} · ` : ""}
+                    {p.title}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {globeSearchResultPosts.length === 0 && globeSearchResultProjects.length === 0 ? (
+              <p style={{ margin: 0, color: "#94a3b8", fontSize: "0.78rem" }}>연관 검색 결과가 없습니다.</p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       {globeProjectPreview ? (
         <div
           role="presentation"
@@ -1248,9 +1768,9 @@ export default function EarthCommunity() {
                         fontSize: "0.76rem",
                         fontWeight: 600,
                         borderRadius: 8,
-                        border: "1px solid rgba(15,23,42,0.15)",
-                        background: "#fff",
-                        color: "#374151",
+                        border: "1px solid var(--feed-border)",
+                        background: "var(--feed-bg-card)",
+                        color: "var(--feed-text-secondary)",
                         cursor: "pointer",
                       }}
                     >
@@ -1296,14 +1816,20 @@ export default function EarthCommunity() {
             </div>
             <div style={{ ...globePostModalBodyStyle, maxHeight: "min(82vh, 720px)", padding: "12px 14px 14px" }}>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start" }}>
-                <div style={{ flex: "1 1 280px", minWidth: 0 }}>
+                <div
+                  style={{
+                    flex: "1 1 280px",
+                    minWidth: 0,
+                    marginTop: "clamp(1.75rem, 2.85vw, 2.6rem)",
+                  }}
+                >
                   <div
                     style={{
                       width: "100%",
                       aspectRatio: "16 / 10",
                       borderRadius: 12,
                       overflow: "hidden",
-                      background: "#0f172a",
+                      background: "var(--feed-bg-header)",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
@@ -1330,8 +1856,8 @@ export default function EarthCommunity() {
                           width: 32,
                           height: 32,
                           borderRadius: 8,
-                          border: "1px solid rgba(15,23,42,0.12)",
-                          background: "#fff",
+                          border: "1px solid var(--feed-border)",
+                          background: "var(--feed-bg-card)",
                           cursor: "pointer",
                         }}
                       >
@@ -1362,9 +1888,9 @@ export default function EarthCommunity() {
                               border:
                                 i === Math.min(globeProjectSlideIdx, globeProjectGallery.length - 1)
                                   ? "2px solid #2563eb"
-                                  : "1px solid rgba(15,23,42,0.12)",
+                                  : "1px solid var(--feed-border)",
                               cursor: "pointer",
-                              background: "#0f172a",
+                              background: "var(--feed-bg-header)",
                             }}
                           >
                             <img src={url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
@@ -1382,8 +1908,8 @@ export default function EarthCommunity() {
                           width: 32,
                           height: 32,
                           borderRadius: 8,
-                          border: "1px solid rgba(15,23,42,0.12)",
-                          background: "#fff",
+                          border: "1px solid var(--feed-border)",
+                          background: "var(--feed-bg-card)",
                           cursor: "pointer",
                         }}
                       >
@@ -1393,7 +1919,7 @@ export default function EarthCommunity() {
                   ) : null}
                 </div>
                 <div style={{ flex: "1 1 300px", minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8 }}>
                     {TROPHY_GRADE[globeProjectPreview.grade] ? (
                       <img
                         src={TROPHY_GRADE[globeProjectPreview.grade].src}
@@ -1405,7 +1931,7 @@ export default function EarthCommunity() {
                         🏆
                       </span>
                     )}
-                    <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "#64748b" }}>
+                    <span style={{ fontSize: "0.92rem", fontWeight: 700, color: "#64748b" }}>
                       {TROPHY_GRADE[globeProjectPreview.grade]
                         ? `${TROPHY_GRADE[globeProjectPreview.grade].label} 트로피`
                         : "트로피"}
@@ -1415,9 +1941,9 @@ export default function EarthCommunity() {
                     <h3
                       style={{
                         margin: 0,
-                        fontSize: "1.12rem",
+                        fontSize: "1.34rem",
                         fontWeight: 800,
-                        color: "#0f172a",
+                        color: "var(--feed-text-primary)",
                         lineHeight: 1.25,
                         flex: 1,
                         minWidth: 0,
@@ -1457,7 +1983,7 @@ export default function EarthCommunity() {
                         paddingLeft: 18,
                         fontSize: "0.84rem",
                         lineHeight: 1.55,
-                        color: "#374151",
+                        color: "var(--feed-text-secondary)",
                       }}
                     >
                       {globeProjectDescLines.map((line, idx) => (
@@ -1477,11 +2003,11 @@ export default function EarthCommunity() {
                           gap: 6,
                           padding: "8px 12px",
                           borderRadius: 10,
-                          background: "#f8fafc",
-                          border: "1px solid rgba(15,23,42,0.1)",
+                          background: "var(--feed-bg-page)",
+                          border: "1px solid var(--feed-border)",
                           fontSize: "0.78rem",
                           fontWeight: 600,
-                          color: "#0f172a",
+                          color: "var(--feed-text-primary)",
                           textDecoration: "none",
                           maxWidth: "100%",
                         }}
@@ -1501,11 +2027,11 @@ export default function EarthCommunity() {
                           gap: 6,
                           padding: "8px 12px",
                           borderRadius: 10,
-                          background: "#f8fafc",
-                          border: "1px solid rgba(15,23,42,0.1)",
+                          background: "var(--feed-bg-page)",
+                          border: "1px solid var(--feed-border)",
                           fontSize: "0.78rem",
                           fontWeight: 600,
-                          color: "#0f172a",
+                          color: "var(--feed-text-primary)",
                           textDecoration: "none",
                           maxWidth: "100%",
                         }}
@@ -1585,7 +2111,7 @@ export default function EarthCommunity() {
                 style={{
                   marginTop: 18,
                   paddingTop: 12,
-                  borderTop: "1px solid rgba(15,23,42,0.08)",
+                  borderTop: "1px solid var(--feed-border)",
                   display: "flex",
                   flexWrap: "wrap",
                   alignItems: "center",
@@ -1616,7 +2142,7 @@ export default function EarthCommunity() {
                       style={{
                         fontWeight: 700,
                         fontSize: "0.84rem",
-                        color: "#0f172a",
+                        color: "var(--feed-text-primary)",
                         overflow: "hidden",
                         textOverflow: "ellipsis",
                         whiteSpace: "nowrap",
@@ -1669,9 +2195,9 @@ export default function EarthCommunity() {
                       fontSize: "0.78rem",
                       fontWeight: 600,
                       borderRadius: 8,
-                      border: "1px solid rgba(15,23,42,0.12)",
-                      background: "#fff",
-                      color: "#334155",
+                      border: "1px solid var(--feed-border)",
+                      background: "var(--feed-bg-card)",
+                      color: "var(--feed-text-secondary)",
                       cursor: "pointer",
                     }}
                   >
@@ -1690,7 +2216,7 @@ export default function EarthCommunity() {
                 ) : null}
               </div>
               <div ref={globeProjectCommentsRef} tabIndex={-1} style={{ outline: "none", marginTop: 14 }}>
-                <div style={{ fontWeight: 700, fontSize: "0.84rem", color: "#0f172a", marginBottom: 8 }}>댓글</div>
+                <div style={{ fontWeight: 700, fontSize: "0.84rem", color: "var(--feed-text-primary)", marginBottom: 8 }}>댓글</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "stretch", marginBottom: 8 }}>
                   <textarea
                     value={globeProjCommentDraft}
@@ -1710,9 +2236,11 @@ export default function EarthCommunity() {
                       resize: "vertical",
                       padding: "8px 10px",
                       borderRadius: 8,
-                      border: "1px solid rgba(15,23,42,0.12)",
+                      border: "1px solid var(--feed-border)",
                       fontSize: "0.8rem",
                       fontFamily: "inherit",
+                      background: "var(--feed-bg-card)",
+                      color: "var(--feed-text-primary)",
                     }}
                   />
                   <button
@@ -1740,7 +2268,7 @@ export default function EarthCommunity() {
                 {globeProjCommentErr ? (
                   <p style={{ margin: "0 0 8px", fontSize: "0.74rem", color: "#dc2626" }}>{globeProjCommentErr}</p>
                 ) : null}
-                <div style={{ maxHeight: 240, overflowY: "auto", borderTop: "1px solid rgba(15,23,42,0.08)", paddingTop: 6 }}>
+                <div style={{ maxHeight: 240, overflowY: "auto", borderTop: "1px solid var(--feed-border)", paddingTop: 6 }}>
                   {globeProjComments.map((cm) => {
                     const av = cm.avatar_url ? resolveMediaUrl(cm.avatar_url) : null;
                     const canDel = me?.user_id != null && Number(cm.user_id) === Number(me.user_id);
@@ -1752,7 +2280,7 @@ export default function EarthCommunity() {
                           gap: 10,
                           alignItems: "flex-start",
                           padding: "8px 0",
-                          borderBottom: "1px solid rgba(15,23,42,0.06)",
+                          borderBottom: "1px solid var(--feed-border)",
                         }}
                       >
                         <div
@@ -1771,10 +2299,10 @@ export default function EarthCommunity() {
                         </div>
                         <div style={{ minWidth: 0, flex: 1 }}>
                           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "baseline", marginBottom: 4 }}>
-                            <span style={{ fontWeight: 700, fontSize: "0.8rem", color: "#0f172a" }}>{cm.nickname || "—"}</span>
+                            <span style={{ fontWeight: 700, fontSize: "0.8rem", color: "var(--feed-text-primary)" }}>{cm.nickname || "—"}</span>
                             <span style={{ fontSize: "0.7rem", color: "#94a3b8" }}>{formatGlobeProjectCommentAgo(cm.created_at)}</span>
                           </div>
-                          <p style={{ margin: 0, fontSize: "0.78rem", color: "#334155", whiteSpace: "pre-wrap", lineHeight: 1.45 }}>
+                          <p style={{ margin: 0, fontSize: "0.78rem", color: "var(--feed-text-secondary)", whiteSpace: "pre-wrap", lineHeight: 1.45 }}>
                             {cm.content}
                           </p>
                         </div>
@@ -1862,18 +2390,10 @@ const TECH_STACK_OPTIONS = [
   'GraphQL', 'Tailwind CSS', 'Git',
 ];
 
-// 더미 데이터 (추후 API 연결 시 교체)
-const DUMMY_POSTS = [
-  { id: 1, content: '오늘 드디어 백엔드 API 연결 완료! 🎉 CORS 3시간 잡았다...', likes: 24, comments: 3, timeAgo: '2시간 전' },
-  { id: 2, content: 'React Query로 서버 상태 관리 리팩토링 완료. 코드가 훨씬 깔끔해졌다!', likes: 18, comments: 5, timeAgo: '5시간 전' },
-  { id: 3, content: 'Three.js 지구본 구현 중 🌍 위도/경도 좌표 변환이 생각보다 복잡하네', likes: 31, comments: 8, timeAgo: '1일 전' },
-  { id: 4, content: 'JWT 인증 흐름 완성! Access + Refresh Token으로 보안 강화 🔐', likes: 12, comments: 2, timeAgo: '2일 전' },
-  { id: 5, content: 'Prisma ORM 처음 써봤는데 타입 자동완성이 진짜 편하다 ✨', likes: 9, comments: 1, timeAgo: '3일 전' },
-];
-
 // hasNewDm, hasNewNotif: 새 메시지·알림 여부 → true면 아이콘 왼쪽 하단에 빨간 점 표시
 // onDmClick / onNotifClick: 아이콘 클릭 시 부모에서 읽음 처리
 function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNewDm = false, hasNewNotif = false, onDmClick, onNotifClick, onSendDm, onOpenFeedPost, onViewMorePosts, onOpenProject, trophyRefreshKey = 0, postListRefreshKey = 0, onPostLikeUpdated }) {
+  const navigate = useNavigate();
   const open = !!user;
 
   const [profileData, setProfileData] = useState(null);
@@ -1891,6 +2411,17 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
   const [trophiesLoad, setTrophiesLoad] = useState('idle'); // idle | loading | ok | error
   const [trophySort, setTrophySort] = useState('latest'); // 'latest' | 'popular'
   const [postSort, setPostSort] = useState('latest'); // 'latest' | 'popular'
+  const [combinedLikes, setCombinedLikes] = useState([]);
+  const [combinedLikesLoad, setCombinedLikesLoad] = useState('idle');
+  const [likesLoadingMore, setLikesLoadingMore] = useState(false);
+  const [likesHasMore, setLikesHasMore] = useState(false);
+  const likesFeedAccumRef = useRef([]);
+  const likesTrophyAccumRef = useRef([]);
+  const likesFeedNextRef = useRef(null);
+  const likesTrophyNextRef = useRef(null);
+  const likesLoadMoreLockRef = useRef(false);
+  const likesScrollRootRef = useRef(null);
+  const likesSentinelRef = useRef(null);
 
   const applyProjectsResponse = useCallback((data) => {
     const items = Array.isArray(data?.items) ? data.items : [];
@@ -1957,6 +2488,9 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
             id: p.post_id,
             isFeedPost: true,
             content: String(p.content || '').trim(),
+            tags: Array.isArray(p.hashtags)
+              ? p.hashtags.map((h) => String(h?.name || '').trim()).filter(Boolean)
+              : [],
             likes: Number(p.like_count ?? 0),
             comments: Number(p.comment_count ?? 0),
             isLiked: Boolean(p.isLiked),
@@ -1984,10 +2518,120 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
     };
   }, [user?.id, postSort, postListRefreshKey]);
 
+  const fetchCombinedLikes = useCallback(async () => {
+    const vid = Number(viewer?.user_id);
+    if (!Number.isFinite(vid) || vid <= 0) {
+      setCombinedLikes([]);
+      setCombinedLikesLoad('idle');
+      likesFeedAccumRef.current = [];
+      likesTrophyAccumRef.current = [];
+      likesFeedNextRef.current = null;
+      likesTrophyNextRef.current = null;
+      setLikesHasMore(false);
+      return;
+    }
+    likesFeedAccumRef.current = [];
+    likesTrophyAccumRef.current = [];
+    likesFeedNextRef.current = null;
+    likesTrophyNextRef.current = null;
+    setLikesHasMore(false);
+    setCombinedLikesLoad('loading');
+    try {
+      const [fr, tr] = await Promise.all([
+        api.get(`/feed/user/${vid}/likes`, { params: { limit: 50 } }),
+        api.get('/projects/me/liked', { params: { limit: 50 } }),
+      ]);
+      const feedPosts = Array.isArray(fr.data?.posts) ? fr.data.posts : [];
+      const trophyRows = Array.isArray(tr.data?.items) ? tr.data.items : [];
+      likesFeedAccumRef.current = feedPosts;
+      likesTrophyAccumRef.current = trophyRows;
+      likesFeedNextRef.current = fr.data?.nextCursor ?? null;
+      likesTrophyNextRef.current = tr.data?.nextCursor ?? null;
+      setLikesHasMore(Boolean(likesFeedNextRef.current || likesTrophyNextRef.current));
+      setCombinedLikes(buildMergedLikeEntries(feedPosts, trophyRows));
+      setCombinedLikesLoad('ok');
+    } catch {
+      setCombinedLikes([]);
+      setCombinedLikesLoad('error');
+    }
+  }, [viewer?.user_id]);
+
+  const loadMoreCombinedLikes = useCallback(async () => {
+    const vid = Number(viewer?.user_id);
+    if (!Number.isFinite(vid) || vid <= 0 || likesLoadMoreLockRef.current) return;
+    const fNext = likesFeedNextRef.current;
+    const tNext = likesTrophyNextRef.current;
+    if (fNext == null && tNext == null) return;
+    likesLoadMoreLockRef.current = true;
+    setLikesLoadingMore(true);
+    try {
+      const feedP =
+        fNext != null
+          ? api.get(`/feed/user/${vid}/likes`, { params: { limit: 50, last_post_id: fNext } })
+          : Promise.resolve({ data: { posts: [], nextCursor: null } });
+      const trophyP =
+        tNext != null
+          ? api.get('/projects/me/liked', { params: { limit: 50, last_trophy_id: tNext } })
+          : Promise.resolve({ data: { items: [], nextCursor: null } });
+      const [fr, tr] = await Promise.all([feedP, trophyP]);
+      const newPosts = Array.isArray(fr.data?.posts) ? fr.data.posts : [];
+      const newItems = Array.isArray(tr.data?.items) ? tr.data.items : [];
+      if (fNext != null) {
+        likesFeedAccumRef.current = [...likesFeedAccumRef.current, ...newPosts];
+        likesFeedNextRef.current = fr.data?.nextCursor ?? null;
+      }
+      if (tNext != null) {
+        likesTrophyAccumRef.current = [...likesTrophyAccumRef.current, ...newItems];
+        likesTrophyNextRef.current = tr.data?.nextCursor ?? null;
+      }
+      setLikesHasMore(Boolean(likesFeedNextRef.current || likesTrophyNextRef.current));
+      setCombinedLikes(buildMergedLikeEntries(likesFeedAccumRef.current, likesTrophyAccumRef.current));
+    } catch {
+      /* 추가 페이지 실패 시 기존 목록 유지 */
+    } finally {
+      likesLoadMoreLockRef.current = false;
+      setLikesLoadingMore(false);
+    }
+  }, [viewer?.user_id]);
+
+  useEffect(() => {
+    if (activeTab === 'likes' && !user?.isMe) setActiveTab('posts');
+  }, [user?.id, user?.isMe, activeTab]);
+
+  useEffect(() => {
+    if (!open || !user?.isMe || activeTab !== 'likes' || !viewer?.user_id) return undefined;
+    void fetchCombinedLikes();
+    return undefined;
+  }, [open, user?.isMe, activeTab, viewer?.user_id, trophyRefreshKey, postListRefreshKey, fetchCombinedLikes]);
+
+  useEffect(() => {
+    if (activeTab !== 'likes' || !user?.isMe || combinedLikesLoad !== 'ok' || !likesHasMore) return undefined;
+    const root = likesScrollRootRef.current;
+    const sent = likesSentinelRef.current;
+    if (!root || !sent) return undefined;
+    const ob = new IntersectionObserver(
+      (ents) => {
+        if (!ents[0]?.isIntersecting || likesLoadMoreLockRef.current) return;
+        void loadMoreCombinedLikes();
+      },
+      { root, rootMargin: '120px', threshold: 0 },
+    );
+    ob.observe(sent);
+    return () => ob.disconnect();
+  }, [activeTab, user?.isMe, combinedLikesLoad, likesHasMore, combinedLikes.length, likesLoadingMore, loadMoreCombinedLikes]);
+
   useEffect(() => {
     if (!user) {
       setProfileData(null);
       setUserPosts([]);
+      setCombinedLikes([]);
+      setCombinedLikesLoad('idle');
+      likesFeedAccumRef.current = [];
+      likesTrophyAccumRef.current = [];
+      likesFeedNextRef.current = null;
+      likesTrophyNextRef.current = null;
+      setLikesHasMore(false);
+      setLikesLoadingMore(false);
       setStatusOpen(false);
       setIsExpanded(false);
       setIsFollowing(false);
@@ -2059,6 +2703,12 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
       setUserPosts((prev) =>
         prev.map((p) => (Number(p.id) === pid ? { ...p, likes: likeCount, isLiked: liked } : p)),
       );
+      likesFeedAccumRef.current = likesFeedAccumRef.current
+        .map((p) =>
+          Number(p.post_id) === pid ? { ...p, like_count: likeCount, isLiked: liked } : p,
+        )
+        .filter((p) => !(Number(p.post_id) === pid && !liked));
+      setCombinedLikes(buildMergedLikeEntries(likesFeedAccumRef.current, likesTrophyAccumRef.current));
       onPostLikeUpdated?.({ postId: pid, liked, likeCount });
     } catch (err) {
       const msg = err.response?.data?.message;
@@ -2078,6 +2728,12 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
         else next.delete(`t_${trophyId}`);
         return next;
       });
+      likesTrophyAccumRef.current = likesTrophyAccumRef.current
+        .map((row) =>
+          Number(row.trophy_id) === trophyId ? { ...row, likes: likeCount } : row,
+        )
+        .filter((row) => !(Number(row.trophy_id) === trophyId && !liked));
+      setCombinedLikes(buildMergedLikeEntries(likesFeedAccumRef.current, likesTrophyAccumRef.current));
     } catch (err) {
       const msg = err.response?.data?.message;
       if (msg) console.warn('[trophy like]', msg);
@@ -2097,20 +2753,13 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
     isMe:           user.isMe,
   } : null;
 
+  const profileTabs = user?.isMe
+    ? [['posts', '내 글'], ['trophies', '트로피'], ['likes', '좋아요']]
+    : [['posts', '내 글'], ['trophies', '트로피']];
+
   const streakNameBadge = d ? streakBadgeEmoji(d.current_streak) : '';
 
   const statusInfo = STATUS_CONFIG[currentStatus] || STATUS_CONFIG.offline;
-
-  const visiblePosts = useMemo(() => {
-    if (userPosts.length > 0) return userPosts;
-    const arr = [...DUMMY_POSTS];
-    if (postSort === 'popular') {
-      arr.sort((a, b) => (Number(b.likes) || 0) - (Number(a.likes) || 0));
-    } else {
-      arr.sort((a, b) => (Number(b.id) || 0) - (Number(a.id) || 0));
-    }
-    return arr;
-  }, [userPosts, postSort]);
 
   return (
     <aside
@@ -2200,7 +2849,7 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
 
             {/* 닉네임 */}
             <div style={{ textAlign: 'center', marginBottom: isExpanded ? 4 : 6 }}>
-              <span style={{ fontSize: isExpanded ? '0.95rem' : '1.02rem', fontWeight: 800, color: '#0f1c36', transition: 'font-size 0.3s ease' }}>{d.name}{streakNameBadge ? ` ${streakNameBadge}` : ''}</span>
+              <span style={{ fontSize: isExpanded ? '0.95rem' : '1.02rem', fontWeight: 800, color: 'var(--feed-text-primary)', transition: 'font-size 0.3s ease' }}>{d.name}{streakNameBadge ? ` ${streakNameBadge}` : ''}</span>
             </div>
 
             {/* 기술 스택 칩 - 확장 모드에선 숨김 */}
@@ -2230,7 +2879,7 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
               </p>
             )}
 
-            <hr style={{ border: 'none', borderTop: '1px solid rgba(0,0,0,0.08)', margin: '0 0 8px' }} />
+            <hr style={{ border: 'none', borderTop: '1px solid var(--feed-border)', margin: '0 0 8px' }} />
 
             {/* 통계: 버튼과 3등분 정렬 맞춤 (flex:1로 각 섹션 동일 너비) */}
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
@@ -2238,9 +2887,9 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
                 <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#f59e0b' }}>{d.current_streak}</div>
                 <div style={{ fontSize: '0.62rem', color: '#9ca3af', marginTop: 2 }}>커밋 스트릭</div>
               </div>
-              <div style={{ width: 1, height: 22, background: 'rgba(0,0,0,0.1)', flexShrink: 0 }} />
+              <div style={{ width: 1, height: 22, background: 'var(--feed-border)', flexShrink: 0 }} />
               <div style={{ flex: 1, textAlign: 'center' }}>
-                <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#0f1c36' }}>
+                <div style={{ fontSize: '0.98rem', fontWeight: 800, color: 'var(--feed-text-primary)' }}>
                   {trophiesLoad === 'ok' || (trophiesLoad === 'error' && trophyList.length > 0)
                     ? trophyList.length
                     : trophiesLoad === 'error'
@@ -2251,9 +2900,9 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
                 </div>
                 <div style={{ fontSize: '0.62rem', color: '#9ca3af', marginTop: 2 }}>프로젝트</div>
               </div>
-              <div style={{ width: 1, height: 22, background: 'rgba(0,0,0,0.1)', flexShrink: 0 }} />
+              <div style={{ width: 1, height: 22, background: 'var(--feed-border)', flexShrink: 0 }} />
               <div style={{ flex: 1, textAlign: 'center' }}>
-                <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#0f1c36' }}>{d.follower_count}</div>
+                <div style={{ fontSize: '0.98rem', fontWeight: 800, color: 'var(--feed-text-primary)' }}>{d.follower_count}</div>
                 <div style={{ fontSize: '0.62rem', color: '#9ca3af', marginTop: 2 }}>팔로워</div>
               </div>
             </div>
@@ -2267,7 +2916,7 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
               ) : (
                 <button
                   style={isFollowing
-                    ? { ...profileActionBtnStyle, background: 'rgba(255,255,255,0.08)', color: '#000000', border: '1px solid rgba(255,255,255,0.2)' }
+                    ? { ...profileActionBtnStyle, background: 'var(--feed-bg-page)', color: 'var(--feed-text-primary)', border: '1px solid var(--feed-border)' }
                     : profileActionBtnStyle
                   }
                   onClick={() => setIsFollowing((prev) => !prev)}
@@ -2281,13 +2930,13 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
           {/* ── 카드 2: 내 글 / 트로피 (세로 최대 약 72%로 제한) */}
           <div style={{ ...profileCardStyle, marginTop: 8, flex: '1 1 0', maxHeight: '72%', display: 'flex', flexDirection: 'column', minHeight: 0, padding: 0, overflow: 'hidden' }}>
             {/* 탭 헤더 + 펼치기 토글 버튼 - 고정 (스크롤 안 됨) */}
-            <div style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid rgba(0,0,0,0.08)', padding: '0 16px', flexShrink: 0, minHeight: 40 }}>
-              {[['posts', '내 글'], ['trophies', '트로피']].map(([key, label]) => (
+            <div style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid var(--feed-border)', padding: '0 16px', flexShrink: 0, minHeight: 40 }}>
+              {profileTabs.map(([key, label]) => (
                 <button key={key}
                   style={{
                     flex: 1, border: 'none', background: 'none',
                     padding: '10px 0', cursor: 'pointer',
-                    fontSize: '0.9rem', fontWeight: activeTab === key ? 700 : 400,
+                    fontSize: profileTabs.length > 2 ? '0.82rem' : '0.9rem', fontWeight: activeTab === key ? 700 : 400,
                     color: activeTab === key ? '#3b82f6' : '#9ca3af',
                     borderBottom: activeTab === key ? '2px solid #3b82f6' : '2px solid transparent',
                     transition: 'color 0.2s',
@@ -2312,7 +2961,7 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
             </div>
 
             {/* 스크롤 가능한 콘텐츠 영역 - 탭 헤더는 고정, 이 영역만 스크롤됨 */}
-            <div className="tab-scroll" style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: '6px 14px 14px' }}>
+            <div className="tab-scroll" ref={likesScrollRootRef} style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: '6px 14px 14px' }}>
 
             {/* 내 글 탭 */}
             {activeTab === 'posts' && (
@@ -2327,9 +2976,9 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
                         padding: '4px 8px',
                         fontSize: '0.76rem',
                         borderRadius: 8,
-                        border: '1px solid rgba(0,0,0,0.12)',
-                        background: '#fff',
-                        color: '#0f1c36',
+                        border: '1px solid var(--feed-border)',
+                        background: 'var(--feed-bg-card)',
+                        color: 'var(--feed-text-primary)',
                       }}
                     >
                       <option value="latest">최신순</option>
@@ -2337,7 +2986,13 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
                     </select>
                   </label>
                 </div>
-                {visiblePosts.map(post => (
+                {userPosts.length === 0 ? (
+                  <p style={{ margin: '1.1rem 0', textAlign: 'center', fontSize: '0.86rem', color: '#6b7280' }}>
+                    등록된 게시글이 없습니다
+                  </p>
+                ) : (
+                  <>
+                {userPosts.map(post => (
                   <div
                     key={post.id}
                     style={{
@@ -2361,9 +3016,71 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
                       onOpenFeedPost?.(pid);
                     }}
                   >
-                    <p style={{ margin: '0 0 6px', fontSize: '0.86rem', color: '#1f2937', lineHeight: 1.45 }}>
+                    <p style={{ margin: '0 0 6px', fontSize: '0.86rem', color: 'var(--feed-text-primary)', lineHeight: 1.45 }}>
                       {post.content}
                     </p>
+                    {Array.isArray(post.tags) && post.tags.length > 0 ? (
+                      <div
+                        className="feed-tags"
+                        style={{ margin: '2px 0 8px' }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {post.tags.slice(0, 5).map((t, ti) => {
+                          const pill = getTagPillColors(t);
+                          return (
+                            <span
+                              key={`${post.id}-${t}-${ti}`}
+                              className="feed-tag-pill"
+                              role="link"
+                              tabIndex={0}
+                              style={{
+                                ...pill,
+                                borderRadius: '999px',
+                                padding: '0.2rem 0.55rem',
+                                fontWeight: 600,
+                                fontSize: '0.72rem',
+                                display: 'inline-block',
+                                lineHeight: 1.35,
+                                cursor: 'pointer',
+                              }}
+                              title={`${t} 태그 피드`}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                navigate(`/tag/${encodeURIComponent(t)}`);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  navigate(`/tag/${encodeURIComponent(t)}`);
+                                }
+                              }}
+                            >
+                              {t}
+                            </span>
+                          );
+                        })}
+                        {post.tags.length > 5 ? (
+                          <span
+                            className="feed-tag-pill"
+                            aria-label={`해시태그 ${post.tags.length - 5}개 더 있음`}
+                            style={{
+                              borderRadius: '999px',
+                              padding: '0.2rem 0.5rem',
+                              fontWeight: 700,
+                              fontSize: '0.72rem',
+                              display: 'inline-block',
+                              lineHeight: 1.35,
+                              background: 'rgba(148, 163, 184, 0.28)',
+                              color: '#475569',
+                            }}
+                          >
+                            +
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginTop: 0 }} onClick={(e) => e.stopPropagation()}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                       {/* 좋아요 — 피드와 동일한 채움 하트(빨간색) */}
@@ -2433,6 +3150,8 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
                 >
                   더보기 →
                 </button>
+                  </>
+                )}
               </div>
             )}
 
@@ -2469,9 +3188,9 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
                         padding: '4px 8px',
                         fontSize: '0.76rem',
                         borderRadius: 8,
-                        border: '1px solid rgba(0,0,0,0.12)',
-                        background: '#fff',
-                        color: '#0f1c36',
+                        border: '1px solid var(--feed-border)',
+                        background: 'var(--feed-bg-card)',
+                        color: 'var(--feed-text-primary)',
                       }}
                     >
                       <option value="latest">최신순</option>
@@ -2553,7 +3272,7 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
                           style={{
                             fontWeight: 700,
                             fontSize: '0.88rem',
-                            color: '#0f1c36',
+                            color: 'var(--feed-text-primary)',
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
                             whiteSpace: 'nowrap',
@@ -2637,6 +3356,334 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
               </div>
             )}
 
+            {activeTab === 'likes' && user?.isMe && (
+              <div>
+                {combinedLikesLoad === 'loading' && (
+                  <p style={{ fontSize: '0.82rem', color: '#9ca3af', padding: '8px 0' }}>불러오는 중…</p>
+                )}
+                {combinedLikesLoad === 'error' && (
+                  <p style={{ fontSize: '0.82rem', color: '#f87171', padding: '8px 0' }}>목록을 불러오지 못했습니다.</p>
+                )}
+                {combinedLikesLoad === 'ok' && combinedLikes.length === 0 && (
+                  <p style={{ margin: '1.1rem 0', textAlign: 'center', fontSize: '0.86rem', color: '#6b7280' }}>
+                    좋아요한 항목이 없습니다
+                  </p>
+                )}
+                {combinedLikesLoad === 'ok' &&
+                  combinedLikes.map((entry) =>
+                    entry.kind === 'feed' ? (
+                      <div
+                        key={entry.id}
+                        style={{ ...postItemStyle, cursor: 'pointer' }}
+                        role="link"
+                        tabIndex={0}
+                        onClick={() => {
+                          const pid = Number(entry.postId);
+                          if (!Number.isFinite(pid) || pid <= 0) return;
+                          onOpenFeedPost?.(pid);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key !== 'Enter' && e.key !== ' ') return;
+                          e.preventDefault();
+                          const pid = Number(entry.postId);
+                          if (!Number.isFinite(pid) || pid <= 0) return;
+                          onOpenFeedPost?.(pid);
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
+                          <span
+                            style={{
+                              fontSize: '0.62rem',
+                              fontWeight: 700,
+                              padding: '2px 6px',
+                              borderRadius: 6,
+                              background: '#dbeafe',
+                              color: '#1d4ed8',
+                            }}
+                          >
+                            피드
+                          </span>
+                          <span style={{ fontSize: '0.72rem', color: '#9ca3af', flexShrink: 0 }}>{entry.timeAgo}</span>
+                        </div>
+                        <p style={{ margin: '0 0 6px', fontSize: '0.86rem', color: 'var(--feed-text-primary)', lineHeight: 1.45 }}>
+                          {entry.content}
+                        </p>
+                        {Array.isArray(entry.tags) && entry.tags.length > 0 ? (
+                          <div
+                            className="feed-tags"
+                            style={{ margin: '2px 0 8px' }}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {entry.tags.slice(0, 5).map((t, ti) => {
+                              const pill = getTagPillColors(t);
+                              return (
+                                <span
+                                  key={`${entry.id}-${t}-${ti}`}
+                                  className="feed-tag-pill"
+                                  role="link"
+                                  tabIndex={0}
+                                  style={{
+                                    ...pill,
+                                    borderRadius: '999px',
+                                    padding: '0.2rem 0.55rem',
+                                    fontWeight: 600,
+                                    fontSize: '0.72rem',
+                                    display: 'inline-block',
+                                    lineHeight: 1.35,
+                                    cursor: 'pointer',
+                                  }}
+                                  title={`${t} 태그 피드`}
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    navigate(`/tag/${encodeURIComponent(t)}`);
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter' || e.key === ' ') {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      navigate(`/tag/${encodeURIComponent(t)}`);
+                                    }
+                                  }}
+                                >
+                                  {t}
+                                </span>
+                              );
+                            })}
+                            {entry.tags.length > 5 ? (
+                              <span
+                                className="feed-tag-pill"
+                                aria-label={`해시태그 ${entry.tags.length - 5}개 더 있음`}
+                                style={{
+                                  borderRadius: '999px',
+                                  padding: '0.2rem 0.5rem',
+                                  fontWeight: 700,
+                                  fontSize: '0.72rem',
+                                  display: 'inline-block',
+                                  lineHeight: 1.35,
+                                  background: 'rgba(148, 163, 184, 0.28)',
+                                  color: '#475569',
+                                }}
+                              >
+                                +
+                              </span>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        <div
+                          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginTop: 0 }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <button
+                              type="button"
+                              className="feed-post-like-btn"
+                              data-liked={entry.isLiked ? 'true' : 'false'}
+                              disabled={!viewer?.user_id}
+                              aria-label={entry.isLiked ? '좋아요 취소' : '좋아요'}
+                              aria-pressed={entry.isLiked}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 4,
+                                border: 'none',
+                                background: 'none',
+                                cursor: viewer?.user_id ? 'pointer' : 'default',
+                                padding: '2px 0',
+                                opacity: viewer?.user_id ? 1 : 0.5,
+                                color: entry.isLiked ? '#e11d48' : '#94a3b8',
+                              }}
+                              onClick={(e) => handleFeedPostLike(entry.postId, e)}
+                            >
+                              <span style={{ display: 'inline-flex', transform: 'scale(0.88)', transformOrigin: 'center' }}>
+                                <HeartIcon filled={entry.isLiked} />
+                              </span>
+                              <span style={{ fontSize: '0.76rem', fontWeight: 600 }}>{entry.likes}</span>
+                            </button>
+                            <button
+                              type="button"
+                              style={{ display: 'flex', alignItems: 'center', gap: 3, border: 'none', background: 'none', cursor: 'pointer', padding: '2px 0' }}
+                            >
+                              <img src="/message_icon.svg" alt="댓글" style={{ width: 15, height: 15, opacity: 0.5 }} />
+                              <span style={{ fontSize: '0.76rem', color: '#9ca3af' }}>{entry.comments}</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div
+                        key={entry.id}
+                        role="button"
+                        tabIndex={0}
+                        style={trophyFeedCardStyle}
+                        onClick={() => {
+                          const trophy = entry.trophy;
+                          onOpenProject?.({
+                            ...trophy,
+                            liked: true,
+                            ownerProfile: {
+                              nickname: trophy.authorNickname || '—',
+                              avatar_url: trophy.authorAvatarUrl,
+                              bio: '',
+                              isOwnerMe:
+                                viewer?.user_id != null &&
+                                trophy.ownerUserId != null &&
+                                Number(viewer.user_id) === Number(trophy.ownerUserId),
+                            },
+                          });
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key !== 'Enter' && e.key !== ' ') return;
+                          e.preventDefault();
+                          const trophy = entry.trophy;
+                          onOpenProject?.({
+                            ...trophy,
+                            liked: true,
+                            ownerProfile: {
+                              nickname: trophy.authorNickname || '—',
+                              avatar_url: trophy.authorAvatarUrl,
+                              bio: '',
+                              isOwnerMe:
+                                viewer?.user_id != null &&
+                                trophy.ownerUserId != null &&
+                                Number(viewer.user_id) === Number(trophy.ownerUserId),
+                            },
+                          });
+                        }}
+                      >
+                        <div style={trophyFeedCardThumbWrap}>
+                          {entry.trophy.image ? (
+                            <img src={entry.trophy.image} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          ) : (
+                            <div
+                              style={{
+                                width: '100%',
+                                height: '100%',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                color: '#94a3b8',
+                                fontSize: '1.25rem',
+                              }}
+                              aria-hidden
+                            >
+                              📁
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+                            <span
+                              style={{
+                                fontSize: '0.62rem',
+                                fontWeight: 700,
+                                padding: '2px 6px',
+                                borderRadius: 6,
+                                background: '#fef3c7',
+                                color: '#b45309',
+                              }}
+                            >
+                              트로피
+                            </span>
+                            <span style={{ fontSize: '0.7rem', color: '#94a3b8', flexShrink: 0 }}>
+                              {panelTimeAgoFromTs(entry.likedAt)}
+                            </span>
+                          </div>
+                          <span
+                            style={{
+                              fontWeight: 700,
+                              fontSize: '0.88rem',
+                              color: 'var(--feed-text-primary)',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {entry.trophy.title}
+                          </span>
+                          <p
+                            style={{
+                              margin: 0,
+                              fontSize: '0.78rem',
+                              color: '#64748b',
+                              lineHeight: 1.45,
+                              overflow: 'hidden',
+                              display: '-webkit-box',
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: 'vertical',
+                            }}
+                          >
+                            {entry.trophy.desc}
+                          </p>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+                            {entry.trophy.techStacks.slice(0, 4).map((tag) => (
+                              <span key={tag} style={{ ...techChipStyle, fontSize: '0.62rem', padding: '2px 6px' }}>
+                                {tag}
+                              </span>
+                            ))}
+                            {entry.trophy.techStacks.length > 4 ? (
+                              <span style={{ fontSize: '0.62rem', color: '#94a3b8' }}>+{entry.trophy.techStacks.length - 4}</span>
+                            ) : null}
+                          </div>
+                          <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>{entry.trophy.dateRange}</span>
+                        </div>
+                        <div
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'flex-end',
+                            justifyContent: 'space-between',
+                            flexShrink: 0,
+                            minHeight: 88,
+                            width: 56,
+                          }}
+                        >
+                          {TROPHY_GRADE[entry.trophy.grade] ? (
+                            <img
+                              src={TROPHY_GRADE[entry.trophy.grade].src}
+                              alt=""
+                              style={{ width: 44, height: 'auto', objectFit: 'contain' }}
+                            />
+                          ) : (
+                            <span style={{ fontSize: '1.5rem' }} aria-hidden>
+                              🏆
+                            </span>
+                          )}
+                          <div
+                            style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}
+                            onClick={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => e.stopPropagation()}
+                            role="presentation"
+                          >
+                            <button
+                              type="button"
+                              className="feed-post-like-btn"
+                              data-liked="true"
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: '0.68rem' }}
+                              onClick={(e) => handleTrophyLike(entry.trophy.trophyId, e)}
+                              disabled={!viewer?.user_id}
+                              aria-label="좋아요"
+                            >
+                              <HeartIcon filled />
+                              <span>{entry.trophy.likes}</span>
+                            </button>
+                            <span className="feed-post-meta" style={{ fontSize: '0.62rem', display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                              💬 {entry.trophy.comments ?? 0}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    ),
+                  )}
+                {combinedLikesLoad === 'ok' && likesLoadingMore ? (
+                  <p style={{ fontSize: '0.78rem', color: '#9ca3af', textAlign: 'center', padding: '8px 0' }}>더 불러오는 중…</p>
+                ) : null}
+                {combinedLikesLoad === 'ok' && likesHasMore ? (
+                  <div ref={likesSentinelRef} style={{ height: 1 }} aria-hidden />
+                ) : null}
+              </div>
+            )}
+
             </div>{/* end of tab-scroll */}
           </div>
         </>
@@ -2674,10 +3721,126 @@ const canvasWrapStyle = {
   touchAction: "none",
 };
 
+const globeSearchWrapStyle = {
+  position: "absolute",
+  right: 14,
+  bottom: 18,
+  width: 356,
+  zIndex: 22,
+};
+
+const globeSearchBarStyle = {
+  display: "flex",
+  gap: 8,
+  alignItems: "center",
+  background: "rgba(255,255,255,0.96)",
+  borderRadius: 10,
+  border: "1px solid rgba(15,23,42,0.14)",
+  boxShadow: "0 8px 20px rgba(0,0,0,0.25)",
+  padding: "6px",
+};
+
+const globeSearchInputStyle = {
+  flex: 1,
+  minWidth: 0,
+  border: "1px solid rgba(15,23,42,0.12)",
+  borderRadius: 8,
+  padding: "8px 10px",
+  fontSize: "0.82rem",
+  color: "#0f1c36",
+  background: "#fff",
+};
+
+const globeSearchBtnStyle = {
+  border: "none",
+  background: "#3b82f6",
+  color: "#fff",
+  fontWeight: 700,
+  fontSize: "0.78rem",
+  borderRadius: 8,
+  padding: "8px 12px",
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+};
+
+const globeSearchSuggestStyle = {
+  position: "absolute",
+  left: 0,
+  right: 0,
+  bottom: "calc(100% + 8px)",
+  maxHeight: 250,
+  overflowY: "auto",
+  background: "rgba(248,250,252,0.98)",
+  border: "1px solid rgba(15,23,42,0.12)",
+  borderRadius: 10,
+  boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
+  padding: "8px 0",
+};
+
+const globeSearchSectionStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 2,
+  padding: "0 8px",
+};
+
+const globeSearchSectionTitleStyle = {
+  fontSize: "0.72rem",
+  fontWeight: 700,
+  color: "#64748b",
+  padding: "4px 6px",
+};
+
+const globeSearchItemBtnStyle = {
+  width: "100%",
+  textAlign: "left",
+  background: "transparent",
+  border: "none",
+  borderRadius: 8,
+  color: "#0f172a",
+  fontSize: "0.78rem",
+  padding: "7px 8px",
+  cursor: "pointer",
+};
+
+const globeSearchResultPopupStyle = {
+  position: "absolute",
+  right: 14,
+  bottom: 74,
+  width: 356,
+  maxHeight: 300,
+  display: "flex",
+  flexDirection: "column",
+  background: "rgba(248,250,252,0.98)",
+  border: "1px solid rgba(15,23,42,0.16)",
+  borderRadius: 12,
+  boxShadow: "0 10px 28px rgba(0,0,0,0.28)",
+  zIndex: 23,
+  overflow: "hidden",
+};
+
+const globeSearchResultHeaderStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  padding: "8px 10px",
+  borderBottom: "1px solid rgba(15,23,42,0.1)",
+  background: "rgba(241,245,249,0.9)",
+};
+
+const globeSearchResultBodyStyle = {
+  padding: "8px",
+  overflowY: "auto",
+  maxHeight: 248,
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+};
+
 // 랜딩 페이지 nav-item CSS와 동일한 스타일 + DM·알림 빨간점 펄스 애니메이션
 const navGlobalStyles = `
   .globe-nav-item {
-    color: #ffffff;
+    color: var(--globe-nav-fg, #ffffff);
     cursor: pointer;
     padding: 8px 0;
     border: none;
@@ -2689,11 +3852,11 @@ const navGlobalStyles = `
     transition: color 0.2s, border-color 0.2s;
   }
   .globe-nav-item:hover {
-    color: rgba(255,255,255,0.8);
+    color: var(--globe-nav-fg-hover, rgba(255,255,255,0.8));
   }
   .globe-nav-item.active {
-    color: #4e9af1;
-    border-bottom: 2px solid #4e9af1;
+    color: var(--globe-nav-active, #4e9af1);
+    border-bottom: 2px solid var(--globe-nav-active, #4e9af1);
   }
   @keyframes pulse-red {
     0%   { box-shadow: 0 0 0 0   rgba(239, 68, 68, 0.8); }
@@ -2708,8 +3871,14 @@ const navGlobalStyles = `
     height: 9px;
     background: #ef4444;
     border-radius: 50%;
-    border: 1.5px solid white;
+    border: 1.5px solid var(--globe-notif-ring, #ffffff);
     animation: pulse-red 1.6s ease-out infinite;
+  }
+  .globe-search-hit:hover {
+    background: var(--globe-search-hit-hover, rgba(15,23,42,0.06));
+  }
+  .globe-search-input::placeholder {
+    color: var(--globe-search-ph, #64748b);
   }
   /* 탭 스크롤 영역 - 오른쪽에 얇은 스크롤바 표시 */
   .tab-scroll {
@@ -2725,6 +3894,13 @@ const navGlobalStyles = `
   .tab-scroll::-webkit-scrollbar-thumb {
     background: rgba(0,0,0,0.18);
     border-radius: 3px;
+  }
+  @keyframes earth-route-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  .earth-community-root--route-enter {
+    animation: earth-route-fade-in 0.42s ease-out;
   }
 `;
 
@@ -2764,24 +3940,25 @@ const panelStyle = {
   scrollbarWidth: "none",
 };
 
-// 프로필 카드 - PNG처럼 흰색 반투명 카드
+// 프로필 카드 — :root data-theme 변수와 동기화
 const profileCardStyle = {
-  background: "rgba(255, 255, 255, 0.92)",
+  background: "var(--feed-bg-card)",
   backdropFilter: "blur(16px)",
   borderRadius: 20,
   padding: "20px",
-  border: "1px solid rgba(255,255,255,0.7)",
-  boxShadow: "0 8px 32px rgba(0,0,0,0.14)",
+  border: "1px solid var(--feed-border)",
+  boxShadow: "var(--feed-shadow, 0 8px 32px rgba(0,0,0,0.14))",
+  color: "var(--feed-text-primary)",
 };
 
-// 닫기 버튼 - 밝은 카드 배경에 맞게 다크 색상
+// 닫기 버튼
 const closeBtnStyle = {
   width: 28,
   height: 28,
   borderRadius: "50%",
   border: "none",
-  background: "rgba(0,0,0,0.08)",
-  color: "#374151",
+  background: "var(--feed-bg-page)",
+  color: "var(--feed-text-secondary)",
   fontSize: 16,
   cursor: "pointer",
   display: "flex",
@@ -2836,10 +4013,10 @@ const statusDropdownStyle = {
   position: "absolute",
   top: "calc(100% + 6px)",
   right: 0,
-  background: "white",
+  background: "var(--feed-bg-card)",
   borderRadius: 12,
-  boxShadow: "0 4px 20px rgba(0,0,0,0.15)",
-  border: "1px solid rgba(0,0,0,0.07)",
+  boxShadow: "var(--feed-shadow, 0 4px 20px rgba(0,0,0,0.15))",
+  border: "1px solid var(--feed-border)",
   padding: "6px 0",
   zIndex: 100,
   minWidth: 130,
@@ -2855,13 +4032,14 @@ const statusOptionStyle = {
   border: "none",
   cursor: "pointer",
   fontSize: "0.88rem",
-  color: "#374151",
+  color: "var(--feed-text-primary)",
+  background: "transparent",
 };
 
 // 글 아이템
 const postItemStyle = {
   padding: "10px 0",
-  borderBottom: "1px solid rgba(0,0,0,0.08)",
+  borderBottom: "1px solid var(--feed-border)",
 };
 
 // 트로피 아이템
