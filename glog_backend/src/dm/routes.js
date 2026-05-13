@@ -161,9 +161,9 @@ router.get('/rooms/:roomId/messages', authenticate, async (req, res) => {
 router.post('/upload', authenticate, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ message: '파일이 없습니다.' });
 
-  // S3 업로드 시 location에 공개 URL이 담김
   const fileUrl = req.file.location;
   const fileType = req.file.mimetype.startsWith('image/') ? 'image' : 'file';
+  console.log('[DM Upload]', { mimetype: req.file.mimetype, fileType, fileUrl });
 
   res.json({ file_url: fileUrl, file_type: fileType, original_name: req.file.originalname });
 });

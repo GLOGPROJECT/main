@@ -2,6 +2,13 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../api/axios';
 import { useAuth } from '../auth/hooks/useAuth';
 
+// http로 시작하는 S3 URL만 사용, 로컬 경로는 null 처리 (배포 환경에서 로컬 파일 접근 불가)
+function resolveFileUrl(url) {
+  if (!url) return null;
+  if (url.startsWith('http')) return url;
+  return null;
+}
+
 function formatDateLabel(dateStr) {
   const d = new Date(dateStr);
   return `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일`;
@@ -348,17 +355,17 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId, sendMessage
               <div key={item.id} style={{ ...s.miniMsgRow, justifyContent: isMine ? 'flex-end' : 'flex-start' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: isMine ? 'flex-end' : 'flex-start' }}>
                   <div style={isMine ? s.miniBubbleMine : s.miniBubbleOther}>
-                    {item.file_url && item.file_type === 'image' && (
+                    {resolveFileUrl(item.file_url) && item.file_type === 'image' && (
                       <img
-                        src={`${item.file_url}`}
+                        src={resolveFileUrl(item.file_url)}
                         alt="첨부 이미지"
                         style={{ maxWidth: 160, maxHeight: 160, borderRadius: 6, display: 'block', cursor: 'pointer' }}
-                        onClick={() => window.open(`${item.file_url}`, '_blank')}
+                        onClick={() => window.open(resolveFileUrl(item.file_url), '_blank')}
                       />
                     )}
-                    {item.file_url && item.file_type === 'file' && (
+                    {resolveFileUrl(item.file_url) && item.file_type === 'file' && (
                       <a
-                        href={`${item.file_url}`}
+                        href={resolveFileUrl(item.file_url)}
                         target="_blank"
                         rel="noreferrer"
                         style={{ color: isMine ? '#fff' : '#2563eb', fontSize: '0.72rem', wordBreak: 'break-all' }}
@@ -507,18 +514,18 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId, sendMessage
                       <div style={s.msgGroup}>
                         <div style={isMine ? s.bubbleMine : s.bubbleOther}>
                           {/* 이미지 파일 */}
-                          {item.file_url && item.file_type === 'image' && (
+                          {resolveFileUrl(item.file_url) && item.file_type === 'image' && (
                             <img
-                              src={`${item.file_url}`}
+                              src={resolveFileUrl(item.file_url)}
                               alt="첨부 이미지"
                               style={{ maxWidth: 220, maxHeight: 220, borderRadius: 8, display: 'block', cursor: 'pointer' }}
-                              onClick={() => window.open(`${item.file_url}`, '_blank')}
+                              onClick={() => window.open(resolveFileUrl(item.file_url), '_blank')}
                             />
                           )}
                           {/* 일반 파일 */}
-                          {item.file_url && item.file_type === 'file' && (
+                          {resolveFileUrl(item.file_url) && item.file_type === 'file' && (
                             <a
-                              href={`${item.file_url}`}
+                              href={resolveFileUrl(item.file_url)}
                               target="_blank"
                               rel="noreferrer"
                               style={{ color: isMine ? '#fff' : '#2563eb', fontSize: '0.82rem', wordBreak: 'break-all' }}
