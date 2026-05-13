@@ -1,8 +1,9 @@
 /* GLog 피드 — data-theme on :root (html) */
 :root[data-theme='light'] {
   --feed-bg-page: #f0f2f5;
-  --feed-bg-header: #0f172a;
-  --feed-text-on-header: #f8fafc;
+  /* 지구본 라이트 모드 네비와 맞춤: 밝은 바 + 어두운 글자 */
+  --feed-bg-header: rgba(255, 255, 255, 0.92);
+  --feed-text-on-header: #0f172a;
   --feed-bg-card: #ffffff;
   --feed-text-primary: #0f172a;
   --feed-text-secondary: #64748b;
@@ -65,6 +66,11 @@
   position: sticky;
   top: 0;
   z-index: 50;
+}
+
+:root[data-theme='light'] .feed-header {
+  border-bottom: 1px solid var(--feed-border);
+  backdrop-filter: blur(8px);
 }
 
 .feed-logo {
@@ -154,6 +160,15 @@
 
 .feed-btn-ghost:hover {
   background: rgb(248 250 252 / 0.1);
+}
+
+:root[data-theme='light'] .feed-btn-ghost {
+  border-color: rgba(15, 23, 42, 0.14);
+  color: var(--feed-text-on-header);
+}
+
+:root[data-theme='light'] .feed-btn-ghost:hover {
+  background: rgba(15, 23, 42, 0.06);
 }
 
 /* 해시태그 검색 자동완성: ghost는 헤더 전용 색이라 카드 위에서 대비가 깨짐 */
@@ -1172,11 +1187,13 @@ button.feed-post-author-link-btn {
 
 .feed-user-page-tabs {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 0.65rem 1rem;
   margin-top: 0.45rem;
   padding-bottom: 2px;
   border-bottom: 1px solid var(--feed-border);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .feed-user-page-tab {
@@ -1190,10 +1207,13 @@ button.feed-post-author-link-btn {
   font-size: 0.82rem;
   color: var(--feed-text-secondary);
   font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .feed-user-page-tab:hover {
   color: var(--feed-text-primary);
+  text-decoration: underline;
 }
 
 .feed-user-page-tab--active {
@@ -2272,3 +2292,13 @@ button.feed-post-author-link-btn {
   margin-top: 1.35rem;
 }
 
+/* 지구본 프로필 카드 통계 — 피드 유저 탭으로 이동 */
+.profile-stat-tap:hover,
+.profile-stat-tap:focus-visible {
+  text-decoration: underline;
+}
+
+.feed-profile-stat-btn:hover,
+.feed-profile-stat-btn:focus-visible {
+  text-decoration: underline;
+}

@@ -44,6 +44,7 @@ import { getTagPillColors } from "./feed/utils/tagPillColors";
 import { fetchPostById, togglePostLike, toggleTrophyLike } from "./feed/api/feedApi";
 import { fetchSearchAutocomplete } from "./feed/api/searchApi";
 import { streakBadgeEmoji } from "./utils/streakBadgeEmoji";
+import { countTrophiesByGrade } from "./utils/trophyGradeCounts";
 import ProjectRegisterModal from "./feed/components/ProjectRegisterModal";
 import { LoginModalProvider } from "./feed/auth/LoginModalContext";
 import { useTrophyModal } from "./feed/trophy/TrophyModalContext";
@@ -996,7 +997,9 @@ export default function EarthCommunity() {
     if (location.state?.openTrophy !== true) return;
     setShowShop(false);
     setActiveNav("트로피");
-    openTrophyModal();
+    const pid = location.state?.openProjectId;
+    const n = pid != null ? Number(pid) : NaN;
+    openTrophyModal(Number.isFinite(n) && n > 0 ? { projectId: n } : undefined);
     navigate(location.pathname, { replace: true, state: {} });
   }, [location.state, location.pathname, navigate, openTrophyModal]);
 
@@ -2817,8 +2820,11 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
     coins:          profileData?.coins       ?? 0,
     current_streak: profileData?.current_streak ?? 0,
     follower_count: Number(profileData?.follower_count ?? 0),
+    following_count: Number(profileData?.following_count ?? 0),
     isMe:           user.isMe,
   } : null;
+
+  const trophyGradeCounts = useMemo(() => countTrophiesByGrade(trophyList), [trophyList]);
 
   const profileTabs = user?.isMe
     ? [['posts', '내 글'], ['trophies', '트로피'], ['likes', '좋아요']]
@@ -2946,16 +2952,75 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
               </p>
             )}
 
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                justifyContent: 'center',
+                alignItems: 'center',
+                gap: '10px 16px',
+                marginBottom: 8,
+                paddingTop: 4,
+                paddingBottom: 8,
+                minHeight: 48,
+                overflow: 'visible',
+                lineHeight: 0,
+              }}
+            >
+              {(['gold', 'silver', 'bronze']).map((key) => (
+                <span
+                  key={key}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    color: 'var(--feed-text-primary)',
+                    lineHeight: 1.2,
+                  }}
+                >
+                  <img
+                    src={TROPHY_GRADE[key].src}
+                    alt=""
+                    style={{
+                      width: 36,
+                      height: 36,
+                      maxHeight: 44,
+                      objectFit: 'contain',
+                      display: 'block',
+                      flexShrink: 0,
+                    }}
+                  />
+                  <span style={{ fontSize: '0.78rem', fontWeight: 700 }}>: {trophyGradeCounts[key]}</span>
+                </span>
+              ))}
+            </div>
+
             <hr style={{ border: 'none', borderTop: '1px solid var(--feed-border)', margin: '0 0 8px' }} />
 
-            {/* 통계: 버튼과 3등분 정렬 맞춤 (flex:1로 각 섹션 동일 너비) */}
-            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
-              <div style={{ flex: 1, textAlign: 'center' }}>
+            {/* 통계: 커밋 스트릭 | 프로젝트 | 팔로우 중 | 팔로워 — 클릭 시 피드 유저 탭으로 이동 */}
+            <div style={{ display: 'flex', alignItems: 'stretch', marginBottom: 8 }}>
+              <button
+                type="button"
+                className="profile-stat-tap"
+                style={{ flex: 1, textAlign: 'center', minWidth: 0, background: 'none', border: 'none', padding: '4px 2px', cursor: 'pointer', color: 'inherit' }}
+                onClick={() => {
+                  onClose();
+                  navigate(`/feed/user/${Number(d.id)}?tab=streak`, { state: { nickname: d.name } });
+                }}
+              >
                 <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#f59e0b' }}>{d.current_streak}</div>
-                <div style={{ fontSize: '0.62rem', color: '#9ca3af', marginTop: 2 }}>커밋 스트릭</div>
-              </div>
-              <div style={{ width: 1, height: 22, background: 'var(--feed-border)', flexShrink: 0 }} />
-              <div style={{ flex: 1, textAlign: 'center' }}>
+                <div style={{ fontSize: '0.58rem', color: '#9ca3af', marginTop: 2, lineHeight: 1.2 }}>커밋 스트릭</div>
+              </button>
+              <div style={{ width: 1, alignSelf: 'stretch', minHeight: 22, background: 'var(--feed-border)', flexShrink: 0 }} />
+              <button
+                type="button"
+                className="profile-stat-tap"
+                style={{ flex: 1, textAlign: 'center', minWidth: 0, background: 'none', border: 'none', padding: '4px 2px', cursor: 'pointer', color: 'inherit' }}
+                onClick={() => {
+                  onClose();
+                  navigate(`/feed/user/${Number(d.id)}?tab=projects`, { state: { nickname: d.name } });
+                }}
+              >
                 <div style={{ fontSize: '0.98rem', fontWeight: 800, color: 'var(--feed-text-primary)' }}>
                   {trophiesLoad === 'ok' || (trophiesLoad === 'error' && trophyList.length > 0)
                     ? trophyList.length
@@ -2965,13 +3030,34 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
                         ? '…'
                         : 0}
                 </div>
-                <div style={{ fontSize: '0.62rem', color: '#9ca3af', marginTop: 2 }}>프로젝트</div>
-              </div>
-              <div style={{ width: 1, height: 22, background: 'var(--feed-border)', flexShrink: 0 }} />
-              <div style={{ flex: 1, textAlign: 'center' }}>
+                <div style={{ fontSize: '0.58rem', color: '#9ca3af', marginTop: 2, lineHeight: 1.2 }}>프로젝트</div>
+              </button>
+              <div style={{ width: 1, alignSelf: 'stretch', minHeight: 22, background: 'var(--feed-border)', flexShrink: 0 }} />
+              <button
+                type="button"
+                className="profile-stat-tap"
+                style={{ flex: 1, textAlign: 'center', minWidth: 0, background: 'none', border: 'none', padding: '4px 2px', cursor: 'pointer', color: 'inherit' }}
+                onClick={() => {
+                  onClose();
+                  navigate(`/feed/user/${Number(d.id)}?tab=following`, { state: { nickname: d.name } });
+                }}
+              >
+                <div style={{ fontSize: '0.98rem', fontWeight: 800, color: 'var(--feed-text-primary)' }}>{d.following_count}</div>
+                <div style={{ fontSize: '0.58rem', color: '#9ca3af', marginTop: 2, lineHeight: 1.2 }}>팔로우 중</div>
+              </button>
+              <div style={{ width: 1, alignSelf: 'stretch', minHeight: 22, background: 'var(--feed-border)', flexShrink: 0 }} />
+              <button
+                type="button"
+                className="profile-stat-tap"
+                style={{ flex: 1, textAlign: 'center', minWidth: 0, background: 'none', border: 'none', padding: '4px 2px', cursor: 'pointer', color: 'inherit' }}
+                onClick={() => {
+                  onClose();
+                  navigate(`/feed/user/${Number(d.id)}?tab=followers`, { state: { nickname: d.name } });
+                }}
+              >
                 <div style={{ fontSize: '0.98rem', fontWeight: 800, color: 'var(--feed-text-primary)' }}>{d.follower_count}</div>
-                <div style={{ fontSize: '0.62rem', color: '#9ca3af', marginTop: 2 }}>팔로워</div>
-              </div>
+                <div style={{ fontSize: '0.58rem', color: '#9ca3af', marginTop: 2, lineHeight: 1.2 }}>팔로워</div>
+              </button>
             </div>
 
             {/* 프로필 수정(본인) / 팔로우 토글(타유저) - 확장 모드에선 숨김 */}

@@ -1,0 +1,259 @@
+import { useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import api from '../../api/axios';
+
+function formatYmd(d) {
+  if (!d) return '—';
+  try {
+    const x = new Date(d);
+    if (Number.isNaN(x.getTime())) return '—';
+    return x.toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit' });
+  } catch {
+    return '—';
+  }
+}
+
+/** 커밋 스트릭 요약 + 기여 인정일 목록 */
+export function FeedUserStreakPanel({ userId }) {
+  const [profile, setProfile] = useState(null);
+  const [days, setDays] = useState([]);
+  const [load, setLoad] = useState('loading');
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    setLoad('loading');
+    setErr(null);
+    Promise.all([
+      api.get(`/users/${userId}`),
+      api.get(`/users/${userId}/contribution-days`),
+    ])
+      .then(([pr, dr]) => {
+        if (!alive) return;
+        setProfile(pr.data);
+        setDays(Array.isArray(dr.data?.days) ? dr.data.days : []);
+        setLoad('ok');
+      })
+      .catch((e) => {
+        if (!alive) return;
+        setErr(e.response?.data?.message || '불러오지 못했습니다.');
+        setLoad('error');
+      });
+    return () => {
+      alive = false;
+    };
+  }, [userId]);
+
+  if (load === 'loading') {
+    return <p className="feed-post-meta" style={{ margin: '1rem 0' }}>불러오는 중…</p>;
+  }
+  if (load === 'error') {
+    return <p className="feed-compose-error" style={{ margin: '1rem 0' }}>{err}</p>;
+  }
+
+  return (
+    <div className="feed-card feed-card-surface" style={{ padding: '1rem 1.1rem' }}>
+      <p className="feed-post-author" style={{ margin: '0 0 0.35rem', fontSize: '0.95rem' }}>커밋 스트릭 요약</p>
+      <p className="feed-post-meta" style={{ margin: '0 0 0.75rem', lineHeight: 1.5 }}>
+        현재{' '}
+        <strong style={{ color: '#f59e0b' }}>
+          {profile?.current_streak ?? 0}일 연속
+        </strong>
+        {' · '}최대 <strong>{profile?.max_streak ?? 0}일</strong>
+        <br />
+        위 연속 일수는 <strong>오늘 또는 어제부터</strong> 하루도 빠짐 없이 이어진 기여일만 셉니다. 아래는 GitHub 동기화로 인정된 <strong>누적 기여일</strong> 목록입니다.
+      </p>
+      {days.length === 0 ? (
+        <p className="feed-post-meta" style={{ margin: 0 }}>아직 기록된 기여일이 없습니다. GitHub 연동 후 스트릭 동기화를 해 보세요.</p>
+      ) : (
+        <ul style={{ listStyle: 'none', margin: 0, padding: 0, maxHeight: 360, overflowY: 'auto' }}>
+          {days.map((row, i) => (
+            <li
+              key={`${row.activity_date}-${i}`}
+              className="feed-post-meta"
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                gap: 12,
+                padding: '0.45rem 0',
+                borderBottom: '1px solid var(--feed-border)',
+                fontSize: '0.82rem',
+              }}
+            >
+              <span>기여 인정일 {formatYmd(row.activity_date)}</span>
+              <span style={{ opacity: 0.75 }}>반영 {formatYmd(row.synced_at)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+const GRADE_IMG = {
+  gold: '/goldtrophy.svg',
+  silver: '/silvertrophy.svg',
+  bronze: '/bronzetrophy.svg',
+};
+
+/** 내 프로젝트(트로피) 목록 */
+export function FeedUserProjectsPanel({ userId }) {
+  const navigate = useNavigate();
+  const [items, setItems] = useState([]);
+  const [load, setLoad] = useState('loading');
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    setLoad('loading');
+    api
+      .get(`/projects/user/${userId}`, { params: { sort: 'latest' } })
+      .then(({ data }) => {
+        if (!alive) return;
+        setItems(Array.isArray(data?.items) ? data.items : []);
+        setLoad('ok');
+      })
+      .catch((e) => {
+        if (!alive) return;
+        setErr(e.response?.data?.message || '불러오지 못했습니다.');
+        setLoad('error');
+      });
+    return () => {
+      alive = false;
+    };
+  }, [userId]);
+
+  if (load === 'loading') {
+    return <p className="feed-post-meta" style={{ margin: '1rem 0' }}>불러오는 중…</p>;
+  }
+  if (load === 'error') {
+    return <p className="feed-compose-error" style={{ margin: '1rem 0' }}>{err}</p>;
+  }
+  if (items.length === 0) {
+    return (
+      <div className="feed-card feed-card-surface" style={{ padding: '1rem 1.1rem' }}>
+        <p className="feed-post-meta" style={{ margin: 0 }}>등록된 프로젝트가 없습니다.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+      {items.map((p) => {
+        const g = p.grade && GRADE_IMG[p.grade] ? p.grade : null;
+        const pid = p.project_id != null ? Number(p.project_id) : NaN;
+        const goTrophyProject = () => {
+          if (!Number.isFinite(pid) || pid <= 0) return;
+          navigate('/globe', { state: { openTrophy: true, openProjectId: pid } });
+        };
+        return (
+          <div
+            key={p.project_id}
+            role="button"
+            tabIndex={0}
+            onClick={goTrophyProject}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                goTrophyProject();
+              }
+            }}
+            className="feed-card feed-card-surface"
+            style={{ padding: '0.75rem 1rem', display: 'flex', gap: 12, alignItems: 'flex-start', cursor: 'pointer' }}
+          >
+            {g ? (
+              <img src={GRADE_IMG[g]} alt="" width={36} height={36} style={{ objectFit: 'contain', flexShrink: 0 }} />
+            ) : (
+              <span style={{ width: 36, flexShrink: 0 }} aria-hidden>📁</span>
+            )}
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div className="feed-post-author" style={{ fontSize: '0.92rem' }}>{p.title}</div>
+              <p className="feed-post-meta" style={{ margin: '0.25rem 0 0', fontSize: '0.78rem', lineHeight: 1.45 }}>
+                {(p.description || '').slice(0, 160)}
+                {(p.description || '').length > 160 ? '…' : ''}
+              </p>
+              <p className="feed-post-meta" style={{ margin: '0.35rem 0 0', fontSize: '0.72rem' }}>
+                좋아요 {p.likes ?? 0} · 댓글 {p.comments ?? 0}
+              </p>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** 팔로워 또는 팔로우 중 목록 */
+export function FeedUserFollowPanel({ userId, mode }) {
+  const [users, setUsers] = useState([]);
+  const [load, setLoad] = useState('loading');
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    setLoad('loading');
+    const path = mode === 'followers' ? `/users/${userId}/followers` : `/users/${userId}/following`;
+    api
+      .get(path)
+      .then(({ data }) => {
+        if (!alive) return;
+        setUsers(Array.isArray(data?.users) ? data.users : []);
+        setLoad('ok');
+      })
+      .catch((e) => {
+        if (!alive) return;
+        setErr(e.response?.data?.message || '불러오지 못했습니다.');
+        setLoad('error');
+      });
+    return () => {
+      alive = false;
+    };
+  }, [userId, mode]);
+
+  if (load === 'loading') {
+    return <p className="feed-post-meta" style={{ margin: '1rem 0' }}>불러오는 중…</p>;
+  }
+  if (load === 'error') {
+    return <p className="feed-compose-error" style={{ margin: '1rem 0' }}>{err}</p>;
+  }
+  if (users.length === 0) {
+    return (
+      <div className="feed-card feed-card-surface" style={{ padding: '1rem 1.1rem' }}>
+        <p className="feed-post-meta" style={{ margin: 0 }}>표시할 유저가 없습니다.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="feed-card feed-card-surface" style={{ padding: '0.5rem 0' }}>
+      <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+        {users.map((u) => (
+          <li
+            key={u.user_id}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              padding: '0.55rem 1rem',
+              borderBottom: '1px solid var(--feed-border)',
+            }}
+          >
+            <Link to={`/feed/user/${u.user_id}`} state={{ nickname: u.nickname }} style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', color: 'inherit', minWidth: 0, flex: 1 }}>
+              {u.avatar_url ? (
+                <img src={u.avatar_url} alt="" width={40} height={40} style={{ borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
+              ) : (
+                <div style={{ width: 40, height: 40, borderRadius: '50%', background: 'var(--feed-border)', flexShrink: 0 }} aria-hidden />
+              )}
+              <span className="feed-post-author" style={{ fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {u.nickname || `유저 #${u.user_id}`}
+              </span>
+            </Link>
+            <span className="feed-post-meta" style={{ fontSize: '0.72rem', flexShrink: 0 }}>
+              {formatYmd(u.since)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}

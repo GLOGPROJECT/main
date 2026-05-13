@@ -5,8 +5,18 @@ const TrophyModalContext = createContext(null);
 
 export function TrophyModalProvider({ children }) {
   const [open, setOpen] = useState(false);
-  const openTrophyModal = useCallback(() => setOpen(true), []);
-  const closeTrophyModal = useCallback(() => setOpen(false), []);
+  const [focusProjectId, setFocusProjectId] = useState(null);
+  const openTrophyModal = useCallback((opts) => {
+    const raw = opts?.projectId;
+    const n = raw != null ? Number(raw) : NaN;
+    setFocusProjectId(Number.isFinite(n) && n > 0 ? n : null);
+    setOpen(true);
+  }, []);
+  const closeTrophyModal = useCallback(() => {
+    setFocusProjectId(null);
+    setOpen(false);
+  }, []);
+  const clearFocusProjectId = useCallback(() => setFocusProjectId(null), []);
   const value = useMemo(
     () => ({ openTrophyModal, closeTrophyModal, isTrophyModalOpen: open }),
     [open, openTrophyModal, closeTrophyModal],
@@ -14,7 +24,12 @@ export function TrophyModalProvider({ children }) {
   return (
     <TrophyModalContext.Provider value={value}>
       {children}
-      <TrophyModal open={open} onClose={closeTrophyModal} />
+      <TrophyModal
+        open={open}
+        onClose={closeTrophyModal}
+        focusProjectId={focusProjectId}
+        onFocusProjectConsumed={clearFocusProjectId}
+      />
     </TrophyModalContext.Provider>
   );
 }
