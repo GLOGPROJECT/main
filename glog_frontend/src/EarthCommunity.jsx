@@ -29,11 +29,9 @@ import { useGLTF, Html, OrbitControls, useAnimations } from "@react-three/drei";
 import { SkeletonUtils } from "three-stdlib";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "./auth/hooks/useAuth";
-<<<<<<< HEAD
-import api from "./api/axios";
-import PetShopModal from "./components/PetShopModal";
-=======
 import api, { API_ORIGIN } from "./api/axios";
+import PetShopModal from "./petshop/petShopModal";
+import DailyRewardModal from "./daily-reward/DailyRewardModal";
 import PostCard, { HeartIcon } from "./feed/components/PostCard";
 import CommentSection from "./feed/components/CommentSection";
 import { fetchPostById, togglePostLike, toggleTrophyLike } from "./feed/api/feedApi";
@@ -41,7 +39,6 @@ import { streakBadgeEmoji } from "./utils/streakBadgeEmoji";
 import ProjectRegisterModal from "./feed/components/ProjectRegisterModal";
 import { LoginModalProvider } from "./feed/auth/LoginModalContext";
 import { useTrophyModal } from "./feed/trophy/TrophyModalContext";
->>>>>>> 84367add10e2db92a61dc64d76c796b70f9239ab
 import * as THREE from "three";
 
 // Html 라벨을 body에 붙여 canvas 상위 overflow에 잘리지 않게 함
@@ -474,6 +471,9 @@ const PROJECT_MODAL_TAG_PALETTE = [
 export default function EarthCommunity() {
   const [selectedUser, setSelectedUser] = useState(null);
   const [showShop, setShowShop] = useState(false);
+  const [showDailyReward, setShowDailyReward] = useState(false);
+  const [dailyRewardAmount, setDailyRewardAmount] = useState(700);
+  const dailyRewardCalledRef = useRef(false);
   // 랜딩 페이지와 동일한 상단 메뉴 active 상태
   const [activeNav, setActiveNav] = useState(null);
   // 새 DM·알림 여부 - 읽으면 false로 변경 (데모: 각각 1개씩 온 상태)
@@ -509,6 +509,21 @@ export default function EarthCommunity() {
   // 마커 클릭과 빈 배경 클릭을 구분하기 위한 ref
   // 마커 클릭 시 true로 설정 → 캔버스 onClick에서 패널 닫힘 방지
   const markerClickedRef = useRef(false);
+
+  // 하루 첫 로그인 보상 요청 (로그인 유저가 확인된 시점에 1회만 실행)
+  useEffect(() => {
+    if (!me?.user_id || dailyRewardCalledRef.current) return;
+    dailyRewardCalledRef.current = true;
+    api.post('/auth/daily-reward')
+      .then(({ data }) => {
+        if (data.rewarded) {
+          setDailyRewardAmount(data.amount);
+          setShowDailyReward(true);
+          updateUser({ coins: data.coins });
+        }
+      })
+      .catch(() => { /* 조용히 무시 */ });
+  }, [me?.user_id, updateUser]);
 
   const globeUsers = useMemo(() => {
     if (!me?.user_id) return USERS;
@@ -846,18 +861,15 @@ export default function EarthCommunity() {
                       });
                     });
                   }
-<<<<<<< HEAD
-                } else if (item === '상점') {
-                  setShowShop(true);
-=======
                 } else if (item === '피드') {
                   navigate('/feed');
                 } else if (item === '트로피') {
                   openTrophyModal();
+                } else if (item === '상점') {
+                  setShowShop(true);
                 } else if (item === '로그아웃') {
                   await logout();
                   navigate('/', { replace: true });
->>>>>>> 84367add10e2db92a61dc64d76c796b70f9239ab
                 } else {
                   // 나머지 메뉴는 시각적 선택 효과만 (추후 각 기능 구현)
                   setActiveNav(item);
@@ -872,6 +884,14 @@ export default function EarthCommunity() {
 
       {/* 펫 상점 모달 */}
       {showShop && <PetShopModal onClose={() => setShowShop(false)} />}
+
+      {/* 일일 첫 로그인 보상 모달 */}
+      {showDailyReward && (
+        <DailyRewardModal
+          amount={dailyRewardAmount}
+          onClose={() => setShowDailyReward(false)}
+        />
+      )}
 
       {/* 유저 상세 패널 - 캐릭터 클릭 시 오른쪽에서 슬라이드 인 */}
       <UserPanel

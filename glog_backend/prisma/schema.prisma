@@ -95,6 +95,8 @@ model User {
   last_streak_manual_refresh_at  DateTime?
   /// 일일 기여 코인 지급 기준일(UTC YYYY-MM-DD). 같은 날은 1회만.
   last_daily_coin_ymd            String?   @db.VarChar(10)
+  /// 일일 첫 로그인 보상 지급일(KST YYYY-MM-DD). 같은 날은 1회만.
+  last_login_reward_ymd          String?   @db.VarChar(10)
 
   created_at        DateTime @default(now())
   updated_at        DateTime @updatedAt
