@@ -91,7 +91,6 @@ export default function GlobalTopNav() {
         <NavLink to="/globe" state={{ openShop: true }} className="gtn-link">
           상점
         </NavLink>
-        </a>
         {isLoggedIn && (
           <button
             type="button"
