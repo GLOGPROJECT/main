@@ -91,26 +91,6 @@ export default function GlobalTopNav() {
         <NavLink to="/globe" state={{ openShop: true }} className="gtn-link">
           상점
         </NavLink>
-        {isLoggedIn && (
-          <button
-            type="button"
-            className="gtn-link gtn-dm-btn"
-            onClick={handleOpenDm}
-            title="메시지"
-            style={{ position: 'relative' }}
-          >
-            <img src="/dm_icon.svg" alt="DM" style={{ width: 20, height: 20, verticalAlign: 'middle' }} />
-            {/* 새 DM 수신 시 빨간 점 */}
-            {hasNewDm && (
-              <span style={{
-                position: 'absolute', top: 2, right: 2,
-                width: 8, height: 8,
-                background: '#ef4444', borderRadius: '50%',
-                pointerEvents: 'none',
-              }} />
-            )}
-          </button>
-        )}
         {isLoggedIn ? (
           <button type="button" className="gtn-link" onClick={handleLogout}>
             로그아웃
