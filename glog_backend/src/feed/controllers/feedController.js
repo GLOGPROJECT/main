@@ -62,9 +62,8 @@ async function listFeed(req, res, next) {
     const viewerId = req.user?.userId ?? null;
     const base = publicBaseFromReq(req);
     const typeParam = String(req.query.type || '').toLowerCase();
-    const params = { last_post_id: req.query.last_post_id, limit: req.query.limit };
+    const params = { last_post_id: req.query.last_post_id, limit: req.query.limit, sort: req.query.sort };
     if (typeParam === 'anonymous') {
-      params.sort = req.query.sort;
       if (req.query.q != null && String(req.query.q).trim() !== '') {
         params.q = String(req.query.q).trim().slice(0, 100);
       }
@@ -87,7 +86,7 @@ async function listFollowingFeed(req, res, next) {
     const viewerId = req.user.userId;
     const base = publicBaseFromReq(req);
     const result = await feedService.listFollowingFeed(
-      { last_post_id: req.query.last_post_id, limit: req.query.limit },
+      { last_post_id: req.query.last_post_id, limit: req.query.limit, sort: req.query.sort },
       viewerId,
       base
     );
@@ -197,6 +196,9 @@ async function createPost(req, res, next) {
       link_preview,
     };
     const result = await feedService.createPost(viewerId, payload, req.files || [], base);
+    const io = req.app.get('io');
+    // 익명 글은 작성자 정보 노출 위험 → payload는 ID만, 클라가 invalidate 후 재조회
+    if (io && result?.post?.post_id) io.emit('feed_post:new', { post_id: result.post.post_id });
     return res.status(201).json(result);
   } catch (err) {
     if (handleWriteError(err, res)) return;
@@ -220,6 +222,9 @@ async function updatePost(req, res, next) {
       payload.hashtags = parseHashtagsInput(body.hashtags);
     }
     const result = await feedService.updatePost(viewerId, pid, payload, req.files || [], base);
+    const io = req.app.get('io');
+    // 익명 글/프로필 정보 노출 방지: 업데이트도 ID만 브로드캐스트
+    if (io && result?.post?.post_id) io.emit('feed_post:updated', { post_id: result.post.post_id });
     return res.json(result);
   } catch (err) {
     if (handleWriteError(err, res)) return;
@@ -235,6 +240,8 @@ async function deletePost(req, res, next) {
       return res.status(400).json({ error: '잘못된 게시글 ID입니다.', code: 'VALIDATION_ERROR' });
     }
     const result = await feedService.deletePost(viewerId, pid);
+    const io = req.app.get('io');
+    if (io) io.emit('feed_post:deleted', { post_id: pid });
     return res.status(200).json(result);
   } catch (err) {
     if (handleWriteError(err, res)) return;
@@ -361,6 +368,8 @@ async function createComment(req, res, next) {
     }
     const content = req.body?.content;
     const comment = await commentService.createComment(viewerId, pid, content);
+    const io = req.app.get('io');
+    if (io && comment) io.emit('feed_comment:new', { post_id: pid, comment });
     return res.status(201).json({ comment });
   } catch (err) {
     if (handleWriteError(err, res)) return;

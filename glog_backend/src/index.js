@@ -105,6 +105,18 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('project:join', (projectId) => {
+    const id = parseInt(projectId, 10);
+    if (!Number.isFinite(id) || id <= 0) return;
+    socket.join(`project:${id}`);
+  });
+
+  socket.on('project:leave', (projectId) => {
+    const id = parseInt(projectId, 10);
+    if (!Number.isFinite(id) || id <= 0) return;
+    socket.leave(`project:${id}`);
+  });
+
   socket.on('disconnect', () => {
     socket.leave(`user:${userId}`);
   });
