@@ -3,23 +3,31 @@ const router = express.Router();
 const prisma = require('../config/db');
 const authenticate = require('../auth/middleware');
 const multer = require('multer');
+const multerS3 = require('multer-s3');
+const { S3Client } = require('@aws-sdk/client-s3');
 const path = require('path');
-const fs = require('fs');
 
-// 업로드 디렉토리 없으면 생성
-const uploadDir = path.join(process.cwd(), 'uploads', 'dm');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
-// multer 설정 — 로컬 저장, 50MB 제한, 이미지/문서 허용
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
+// S3 클라이언트 설정 — .env의 AWS 자격증명 사용
+const s3 = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
   },
 });
+
+// multer-s3 설정 — S3 dmfile 폴더에 저장, 50MB 제한, 이미지/문서 허용
 const upload = multer({
-  storage,
+  storage: multerS3({
+    s3,
+    bucket: process.env.S3_BUCKET_NAME,
+    contentType: multerS3.AUTO_CONTENT_TYPE,
+    key: (req, file, cb) => {
+      // dmfile/타임스탬프-랜덤.확장자 형태로 저장
+      const ext = path.extname(file.originalname);
+      cb(null, `dmfile/${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
+    },
+  }),
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
   fileFilter: (req, file, cb) => {
     // 이미지 + 일반 문서 허용, 동영상 제외
@@ -153,8 +161,8 @@ router.get('/rooms/:roomId/messages', authenticate, async (req, res) => {
 router.post('/upload', authenticate, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ message: '파일이 없습니다.' });
 
-  const fileUrl = `/uploads/dm/${req.file.filename}`;
-  // image/* 이면 'image', 아니면 'file'
+  // S3 업로드 시 location에 공개 URL이 담김
+  const fileUrl = req.file.location;
   const fileType = req.file.mimetype.startsWith('image/') ? 'image' : 'file';
 
   res.json({ file_url: fileUrl, file_type: fileType, original_name: req.file.originalname });

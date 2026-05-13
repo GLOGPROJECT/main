@@ -350,15 +350,15 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId, sendMessage
                   <div style={isMine ? s.miniBubbleMine : s.miniBubbleOther}>
                     {item.file_url && item.file_type === 'image' && (
                       <img
-                        src={`http://localhost:4000${item.file_url}`}
+                        src={`${item.file_url}`}
                         alt="첨부 이미지"
                         style={{ maxWidth: 160, maxHeight: 160, borderRadius: 6, display: 'block', cursor: 'pointer' }}
-                        onClick={() => window.open(`http://localhost:4000${item.file_url}`, '_blank')}
+                        onClick={() => window.open(`${item.file_url}`, '_blank')}
                       />
                     )}
                     {item.file_url && item.file_type === 'file' && (
                       <a
-                        href={`http://localhost:4000${item.file_url}`}
+                        href={`${item.file_url}`}
                         target="_blank"
                         rel="noreferrer"
                         style={{ color: isMine ? '#fff' : '#2563eb', fontSize: '0.72rem', wordBreak: 'break-all' }}
@@ -509,16 +509,16 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId, sendMessage
                           {/* 이미지 파일 */}
                           {item.file_url && item.file_type === 'image' && (
                             <img
-                              src={`http://localhost:4000${item.file_url}`}
+                              src={`${item.file_url}`}
                               alt="첨부 이미지"
                               style={{ maxWidth: 220, maxHeight: 220, borderRadius: 8, display: 'block', cursor: 'pointer' }}
-                              onClick={() => window.open(`http://localhost:4000${item.file_url}`, '_blank')}
+                              onClick={() => window.open(`${item.file_url}`, '_blank')}
                             />
                           )}
                           {/* 일반 파일 */}
                           {item.file_url && item.file_type === 'file' && (
                             <a
-                              href={`http://localhost:4000${item.file_url}`}
+                              href={`${item.file_url}`}
                               target="_blank"
                               rel="noreferrer"
                               style={{ color: isMine ? '#fff' : '#2563eb', fontSize: '0.82rem', wordBreak: 'break-all' }}
