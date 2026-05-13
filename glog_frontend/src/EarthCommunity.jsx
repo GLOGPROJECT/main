@@ -30,6 +30,7 @@ import { SkeletonUtils } from "three-stdlib";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "./auth/hooks/useAuth";
 import api from "./api/axios";
+import PetShopModal from "./components/PetShopModal";
 import * as THREE from "three";
 
 // Html 라벨을 body에 붙여 canvas 상위 overflow에 잘리지 않게 함
@@ -238,6 +239,7 @@ function CameraRig({ selectedUser, earthRef, zoomRef }) {
 // ──────────────────────────────────────────────────────────────────
 export default function EarthCommunity() {
   const [selectedUser, setSelectedUser] = useState(null);
+  const [showShop, setShowShop] = useState(false);
   // 랜딩 페이지와 동일한 상단 메뉴 active 상태
   const [activeNav, setActiveNav] = useState(null);
   // 새 DM·알림 여부 - 읽으면 false로 변경 (데모: 각각 1개씩 온 상태)
@@ -386,6 +388,8 @@ export default function EarthCommunity() {
                       isMe: true,
                     });
                   }
+                } else if (item === '상점') {
+                  setShowShop(true);
                 } else {
                   // 나머지 메뉴는 시각적 선택 효과만 (추후 각 기능 구현)
                   setActiveNav(item);
@@ -397,6 +401,9 @@ export default function EarthCommunity() {
           ))}
         </div>
       </nav>
+
+      {/* 펫 상점 모달 */}
+      {showShop && <PetShopModal onClose={() => setShowShop(false)} />}
 
       {/* 유저 상세 패널 - 캐릭터 클릭 시 오른쪽에서 슬라이드 인 */}
       <UserPanel
