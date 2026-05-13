@@ -34,6 +34,7 @@ import DmPanel from "./dm/DmPanel";
 import { useDmSocket } from "./dm/useDmSocket";
 import PetShopModal from "./petshop/petShopModal";
 import DailyRewardModal from "./daily-reward/DailyRewardModal";
+import AvatarViewerModal from "./avatar-viewer/AvatarViewerModal";
 import PostCard, { HeartIcon } from "./feed/components/PostCard";
 import CommentSection from "./feed/components/CommentSection";
 import { fetchPostById, togglePostLike, toggleTrophyLike } from "./feed/api/feedApi";
@@ -58,15 +59,19 @@ const htmlLabelPortal = typeof document !== "undefined" ? { current: document.bo
 //   { id: "u6", name: "Diego",  bio: "게임 개발자 / 상파울루",  lat: -23.55, lon: -46.63, color: "#f9844a", avatar: "/models/avatar/m_6.glb" },
 // ];
 
+const S3_AVATAR_BASE = 'https://glogs3bucketforimage.s3.ap-northeast-2.amazonaws.com/avatar';
 const AVATAR_POOL = [
-  "/models/avatar/f_1.glb",
-  "/models/avatar/m_2.glb",
-  "/models/avatar/f_4.glb",
-  "/models/avatar/m_4.glb",
-  "/models/avatar/f_7.glb",
-  "/models/avatar/m_6.glb",
+  `${S3_AVATAR_BASE}/f_1.glb`,  `${S3_AVATAR_BASE}/f_2.glb`,  `${S3_AVATAR_BASE}/f_3.glb`,
+  `${S3_AVATAR_BASE}/f_4.glb`,  `${S3_AVATAR_BASE}/f_5.glb`,  `${S3_AVATAR_BASE}/f_6.glb`,
+  `${S3_AVATAR_BASE}/f_7.glb`,  `${S3_AVATAR_BASE}/f_8.glb`,  `${S3_AVATAR_BASE}/f_9.glb`,
+  `${S3_AVATAR_BASE}/f_10.glb`,
+  `${S3_AVATAR_BASE}/m_1.glb`,  `${S3_AVATAR_BASE}/m_2.glb`,  `${S3_AVATAR_BASE}/m_3.glb`,
+  `${S3_AVATAR_BASE}/m_4.glb`,  `${S3_AVATAR_BASE}/m_5.glb`,  `${S3_AVATAR_BASE}/m_6.glb`,
+  `${S3_AVATAR_BASE}/m_7.glb`,  `${S3_AVATAR_BASE}/m_8.glb`,  `${S3_AVATAR_BASE}/m_9.glb`,
+  `${S3_AVATAR_BASE}/m_10.glb`,
 ];
 
+/** model_url 없는 유저의 임시 폴백 (user_id 기반 고정) */
 // Html 라벨 스크린 좌표: 마커 투영 위치에 최대한 가깝게 두되 캔버스 밖·오른쪽 패널 구역으로 클램프
 function clampHtmlLabelScreenPosition(el, camera, size, profilePanelOpen) {
   const objectPos = new THREE.Vector3().setFromMatrixPosition(el.matrixWorld);
@@ -185,7 +190,7 @@ function EarthScene({ users = [], autoRotate, onSelectUser, onSceneClick, dragRe
 // 미리 로딩
 useGLTF.preload("/models/earth/scene.gltf");
 // USERS.forEach((u) => useGLTF.preload(u.avatar)); // 더미 데이터 사용 시 주석 해제
-AVATAR_POOL.forEach((u) => useGLTF.preload(u));
+AVATAR_POOL.forEach((url) => useGLTF.preload(url));
 
 // ──────────────────────────────────────────────────────────────────
 // 3. 유저 마커 - GLB 아바타 + idle 애니메이션 + 카메라 거리 기반 스케일
@@ -271,7 +276,7 @@ function UserMarker({ position, user, onClick, profilePanelOpen }) {
       <group ref={scaleRef}>
         <Suspense fallback={null}>
           {/* avatar: 더미 데이터용 GLB 경로, 없으면 기본 아바타 사용 */}
-          <AvatarModel url={user.avatar || "/models/avatar/m_1.glb"} />
+          <AvatarModel url={user.avatar || `${S3_AVATAR_BASE}/m_1.glb`} />
         </Suspense>
       </group>
 
@@ -479,7 +484,6 @@ export default function EarthCommunity() {
   const [showShop, setShowShop] = useState(false);
   const [showDailyReward, setShowDailyReward] = useState(false);
   const [dailyRewardAmount, setDailyRewardAmount] = useState(700);
-  const dailyRewardCalledRef = useRef(false);
   // 랜딩 페이지와 동일한 상단 메뉴 active 상태
   const [activeNav, setActiveNav] = useState(null);
   const [hasNewDm, setHasNewDm] = useState(false);
@@ -548,8 +552,10 @@ export default function EarthCommunity() {
 
   // 하루 첫 로그인 보상 요청 (로그인 유저가 확인된 시점에 1회만 실행)
   useEffect(() => {
-    if (!me?.user_id || dailyRewardCalledRef.current) return;
-    dailyRewardCalledRef.current = true;
+    if (!me?.user_id) return;
+    const key = `dailyReward_${me.user_id}`;
+    if (sessionStorage.getItem(key)) return;
+    sessionStorage.setItem(key, '1');
     api.post('/auth/daily-reward')
       .then(({ data }) => {
         if (data.rewarded) {
@@ -577,7 +583,7 @@ export default function EarthCommunity() {
       lat,
       lon,
       color: "#4e9af1",
-      avatar: pickAvatarByUserId(me.user_id),
+      avatar: me.model_url || pickAvatarByUserId(me.user_id),
       avatar_url: me.avatar_url || null,
       isMe: true,
       status: me.status || "offline",
@@ -947,6 +953,9 @@ export default function EarthCommunity() {
           onClose={() => setShowDailyReward(false)}
         />
       )}
+
+      {/* 아바타 클릭 시 3D 뷰어 패널 (프로필 패널과 함께 표시) */}
+      <AvatarViewerModal user={selectedUser} />
 
       {/* 유저 상세 패널 - 캐릭터 클릭 시 오른쪽에서 슬라이드 인 */}
       <UserPanel
