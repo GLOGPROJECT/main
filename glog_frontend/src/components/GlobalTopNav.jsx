@@ -1,7 +1,5 @@
-import { useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/hooks/useAuth';
-import DmPanel from '../dm/DmPanel';
 import { useTrophyModal } from '../feed/trophy/TrophyModalContext';
 import './GlobalTopNav.css';
 
@@ -14,7 +12,6 @@ export default function GlobalTopNav() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const isLoggedIn = Boolean(user);
-  const [dmOpen, setDmOpen] = useState(false);
 
   // 소켓에서 내 userId를 구분하기 위해 전역에 설정
   if (user) window.__myUserId = user.user_id;
@@ -62,11 +59,6 @@ export default function GlobalTopNav() {
         <a href="#shop" className="gtn-link">
           상점
         </a>
-        {isLoggedIn && (
-          <button type="button" className="gtn-link gtn-dm-btn" onClick={() => setDmOpen(true)} title="메시지">
-            <img src="/dm_icon.svg" alt="DM" style={{ width: 20, height: 20, verticalAlign: 'middle' }} />
-          </button>
-        )}
         {isLoggedIn ? (
           <button type="button" className="gtn-link" onClick={handleLogout}>
             로그아웃
@@ -77,11 +69,6 @@ export default function GlobalTopNav() {
           </button>
         )}
       </nav>
-
-      {/* DM 패널 — 로그인 시에만 마운트 */}
-      {isLoggedIn && (
-        <DmPanel isOpen={dmOpen} onClose={() => setDmOpen(false)} />
-      )}
     </header>
   );
 }

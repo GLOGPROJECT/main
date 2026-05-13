@@ -37,6 +37,22 @@ function isValidHttpUrl(s) {
   }
 }
 
+async function commentCountsByProjectIds(projectIds) {
+  const uniq = [...new Set(projectIds.filter((n) => Number.isFinite(n) && n > 0))];
+  if (!uniq.length) return new Map();
+  try {
+    const rows = await prisma.projectComment.groupBy({
+      by: ['project_id'],
+      where: { project_id: { in: uniq }, is_deleted: false },
+      _count: { id: true },
+    });
+    return new Map(rows.map((r) => [r.project_id, r._count.id]));
+  } catch (err) {
+    console.error('[commentCountsByProjectIds]', err.message);
+    return new Map();
+  }
+}
+
 /**
  * @param {number} userId
  * @param {number|null} viewerId
@@ -77,8 +93,10 @@ async function listUserProjectsWithTrophies(userId, viewerId, sortMode = 'latest
     }
   }
 
-  return rows
-    .filter((r) => r.trophy)
+  const filtered = rows.filter((r) => r.trophy);
+  const commentCounts = await commentCountsByProjectIds(filtered.map((r) => r.projects_id));
+
+  return filtered
     .map((r) => ({
       project_id: r.projects_id,
       trophy_id: r.trophy.trophies_id,
@@ -100,7 +118,7 @@ async function listUserProjectsWithTrophies(userId, viewerId, sortMode = 'latest
       grade: r.trophy.grade,
       likes: r.trophy.like_count,
       liked_by_me: likedTrophyIds.has(r.trophy.trophies_id),
-      comments: 0,
+      comments: commentCounts.get(r.projects_id) ?? 0,
       contributors: (r.contributors || []).map((c) => ({
         user_id: c.user_id,
         nickname: c.user?.nickname ?? '',
@@ -138,6 +156,7 @@ async function listCommunityProjectsWithTrophies(viewerId, sortMode = 'latest') 
   });
 
   const withTrophy = rows.filter((r) => r.trophy);
+  const commentCounts = await commentCountsByProjectIds(withTrophy.map((r) => r.projects_id));
 
   let likedTrophyIds = new Set();
   if (viewerId && withTrophy.length) {
@@ -172,7 +191,7 @@ async function listCommunityProjectsWithTrophies(viewerId, sortMode = 'latest') 
     grade: r.trophy.grade,
     likes: r.trophy.like_count,
     liked_by_me: likedTrophyIds.has(r.trophy.trophies_id),
-    comments: 0,
+    comments: commentCounts.get(r.projects_id) ?? 0,
     contributors: (r.contributors || []).map((c) => ({
       user_id: c.user_id,
       nickname: c.user?.nickname ?? '',
@@ -497,6 +516,101 @@ async function toggleTrophyLike(viewerId, trophyId) {
 }
 
 /** 오늘(UTC 자정 기준) 등록한 프로젝트 개수 — 하루 3건 한도 표시용 */
+async function listProjectComments(projectId) {
+  const pid = Number(projectId);
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return { ok: false, code: 'validation', message: '유효하지 않은 프로젝트입니다.' };
+  }
+  const project = await prisma.project.findFirst({
+    where: { projects_id: pid, is_deleted: false },
+    select: { projects_id: true },
+  });
+  if (!project) return { ok: false, code: 'not_found', message: '프로젝트를 찾을 수 없습니다.' };
+
+  const rows = await prisma.projectComment.findMany({
+    where: { project_id: pid, is_deleted: false },
+    orderBy: { created_at: 'asc' },
+    include: { user: { select: { user_id: true, nickname: true, avatar_url: true } } },
+  });
+  return {
+    ok: true,
+    comments: rows.map((c) => ({
+      id: c.id,
+      project_id: c.project_id,
+      user_id: c.user_id,
+      nickname: c.user?.nickname ?? '',
+      avatar_url: c.user?.avatar_url ?? null,
+      content: c.content,
+      created_at: c.created_at.toISOString(),
+    })),
+  };
+}
+
+/**
+ * @param {number} userId
+ * @param {number} projectId
+ * @param {unknown} rawContent
+ */
+async function createProjectComment(userId, projectId, rawContent) {
+  const pid = Number(projectId);
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return { ok: false, code: 'validation', message: '유효하지 않은 프로젝트입니다.' };
+  }
+  const content = String(rawContent ?? '').trim();
+  if (!content) return { ok: false, code: 'validation', message: '댓글 내용을 입력해주세요.' };
+  if (content.length > 2000) return { ok: false, code: 'validation', message: '댓글은 2000자 이하로 입력해주세요.' };
+
+  const project = await prisma.project.findFirst({
+    where: { projects_id: pid, is_deleted: false },
+    select: { projects_id: true },
+  });
+  if (!project) return { ok: false, code: 'not_found', message: '프로젝트를 찾을 수 없습니다.' };
+
+  const row = await prisma.projectComment.create({
+    data: { project_id: pid, user_id: userId, content },
+    include: { user: { select: { user_id: true, nickname: true, avatar_url: true } } },
+  });
+
+  return {
+    ok: true,
+    comment: {
+      id: row.id,
+      project_id: row.project_id,
+      user_id: row.user_id,
+      nickname: row.user?.nickname ?? '',
+      avatar_url: row.user?.avatar_url ?? null,
+      content: row.content,
+      created_at: row.created_at.toISOString(),
+    },
+  };
+}
+
+async function deleteProjectComment(userId, projectId, commentId) {
+  const pid = Number(projectId);
+  const cid = Number(commentId);
+  if (!Number.isFinite(pid) || pid <= 0 || !Number.isFinite(cid) || cid <= 0) {
+    return { ok: false, code: 'validation', message: '유효하지 않은 요청입니다.' };
+  }
+
+  const row = await prisma.projectComment.findFirst({
+    where: { id: cid, project_id: pid, is_deleted: false },
+    select: { id: true, user_id: true },
+  });
+  if (!row) {
+    return { ok: false, code: 'not_found', message: '댓글을 찾을 수 없습니다.' };
+  }
+  if (Number(row.user_id) !== Number(userId)) {
+    return { ok: false, code: 'forbidden', message: '본인의 댓글만 삭제할 수 있습니다.' };
+  }
+
+  await prisma.projectComment.update({
+    where: { id: cid },
+    data: { is_deleted: true },
+  });
+
+  return { ok: true, project_id: pid, id: cid };
+}
+
 async function countTodayProjectsForUser(userId) {
   const since = startOfUtcDay();
   return prisma.project.count({
@@ -507,6 +621,9 @@ async function countTodayProjectsForUser(userId) {
 module.exports = {
   listUserProjectsWithTrophies,
   listCommunityProjectsWithTrophies,
+  listProjectComments,
+  createProjectComment,
+  deleteProjectComment,
   createProject,
   updateProject,
   deleteProject,

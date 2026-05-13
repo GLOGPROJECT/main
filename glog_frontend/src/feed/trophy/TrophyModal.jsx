@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/hooks/useAuth';
 import api, { API_ORIGIN } from '../../api/axios';
+import { getAppSocket } from '../../realtime/appSocket';
 import { toggleTrophyLike } from '../api/feedApi';
 import { HeartIcon } from '../components/PostCard';
 import ProjectRegisterModal from '../components/ProjectRegisterModal';
@@ -54,6 +55,18 @@ function formatYmd(d) {
   const m = String(x.getMonth() + 1).padStart(2, '0');
   const day = String(x.getDate()).padStart(2, '0');
   return `${y}.${m}.${day}`;
+}
+
+function formatCommentAgo(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const diffMin = Math.max(0, Math.floor((Date.now() - d.getTime()) / 60000));
+  if (diffMin < 1) return '방금';
+  if (diffMin < 60) return `${diffMin}분 전`;
+  const h = Math.floor(diffMin / 60);
+  if (h < 24) return `${h}시간 전`;
+  return `${Math.floor(h / 24)}일 전`;
 }
 
 function isoToDateInput(v) {
@@ -131,8 +144,15 @@ export default function TrophyModal({ open, onClose }) {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
   const [deleteError, setDeleteError] = useState(null);
+  const [projectComments, setProjectComments] = useState([]);
+  const [commentDraft, setCommentDraft] = useState('');
+  const [commentSubmitting, setCommentSubmitting] = useState(false);
+  const [commentError, setCommentError] = useState(null);
 
   const detailScrollRef = useRef(null);
+  const absorbedCommentIdsRef = useRef(new Set());
+  /** 같은 댓글 삭제가 소켓·로컬에서 두 번 처리되지 않도록 */
+  const commentDeleteDedupRef = useRef(new Set());
   const [trophyLikeBusy, setTrophyLikeBusy] = useState(false);
   const uid = user?.user_id;
 
@@ -150,7 +170,6 @@ export default function TrophyModal({ open, onClose }) {
       setLoad('ok');
     } catch {
       if (!silent) {
-        setItems([]);
         setLoad('error');
       }
     }
@@ -168,6 +187,22 @@ export default function TrophyModal({ open, onClose }) {
     return () => clearInterval(t);
   }, [open, uid, fetchList]);
 
+  // 프로젝트 등록/수정/삭제, 트로피 좋아요 변화는 전역에 영향 → 목록 즉시 갱신 (충돌 방지: fetchList만 호출)
+  useEffect(() => {
+    if (!open || !uid) return undefined;
+    const socket = getAppSocket();
+    if (!socket) return undefined;
+    const bump = () => {
+      fetchList({ silent: true });
+    };
+    socket.on('project:changed', bump);
+    socket.on('trophy:like_changed', bump);
+    return () => {
+      socket.off('project:changed', bump);
+      socket.off('trophy:like_changed', bump);
+    };
+  }, [open, uid, fetchList]);
+
   useEffect(() => {
     if (!open) {
       setView('list');
@@ -180,6 +215,9 @@ export default function TrophyModal({ open, onClose }) {
       setDeleteConfirmOpen(false);
       setDeleteError(null);
       setDeleteSubmitting(false);
+      setProjectComments([]);
+      setCommentDraft('');
+      setCommentError(null);
     }
   }, [open]);
 
@@ -202,6 +240,132 @@ export default function TrophyModal({ open, onClose }) {
       setSelected(next);
     }
   }, [items, view, selected?.id]);
+
+  useEffect(() => {
+    if (view !== 'detail' || !selected?.id) {
+      setProjectComments([]);
+      absorbedCommentIdsRef.current = new Set();
+      commentDeleteDedupRef.current = new Set();
+      return;
+    }
+    absorbedCommentIdsRef.current = new Set();
+    commentDeleteDedupRef.current = new Set();
+    let cancelled = false;
+    api
+      .get(`/projects/${selected.id}/comments`)
+      .then(({ data }) => {
+        if (cancelled) return;
+        const arr = Array.isArray(data?.comments) ? data.comments : [];
+        setProjectComments(arr);
+        absorbedCommentIdsRef.current = new Set(arr.map((x) => Number(x.id)));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProjectComments([]);
+          absorbedCommentIdsRef.current = new Set();
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [view, selected?.id]);
+
+  const absorbProjectComment = useCallback((c) => {
+    if (!c?.id || c.project_id == null) return;
+    const pid = Number(c.project_id);
+    const idNum = Number(c.id);
+    if (absorbedCommentIdsRef.current.has(idNum)) return;
+    absorbedCommentIdsRef.current.add(idNum);
+    setProjectComments((prev) =>
+      [...prev, c].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
+    );
+    setItems((iprev) =>
+      iprev.map((t) => (Number(t.id) === pid ? { ...t, comments: Number(t.comments ?? 0) + 1 } : t)),
+    );
+    setSelected((sprev) =>
+      sprev && Number(sprev.id) === pid ? { ...sprev, comments: Number(sprev.comments ?? 0) + 1 } : sprev,
+    );
+    window.dispatchEvent(new CustomEvent('glog:trophy-project-comments', { detail: { projectId: pid } }));
+  }, []);
+
+  const applyCommentDeleted = useCallback((projectId, commentId) => {
+    const pid = Number(projectId);
+    const cid = Number(commentId);
+    const dedupeKey = `${pid}:${cid}`;
+    if (commentDeleteDedupRef.current.has(dedupeKey)) return;
+    commentDeleteDedupRef.current.add(dedupeKey);
+    absorbedCommentIdsRef.current.delete(cid);
+    setProjectComments((prev) => prev.filter((x) => Number(x.id) !== cid));
+    setItems((iprev) =>
+      iprev.map((t) =>
+        Number(t.id) === pid ? { ...t, comments: Math.max(0, Number(t.comments ?? 0) - 1) } : t,
+      ),
+    );
+    setSelected((sprev) =>
+      sprev && Number(sprev.id) === pid
+        ? { ...sprev, comments: Math.max(0, Number(sprev.comments ?? 0) - 1) }
+        : sprev,
+    );
+    window.dispatchEvent(new CustomEvent('glog:trophy-project-comments', { detail: { projectId: pid } }));
+  }, []);
+
+  useEffect(() => {
+    if (view !== 'detail' || !selected?.id || !user?.user_id) return undefined;
+    const token = window.__accessToken;
+    if (!token) return undefined;
+    const pid = selected.id;
+    const socket = io(API_ORIGIN, { auth: { token } });
+    const onNew = (c) => {
+      if (!c || Number(c.project_id) !== Number(pid)) return;
+      absorbProjectComment(c);
+    };
+    const onDel = (payload) => {
+      if (!payload || Number(payload.project_id) !== Number(pid)) return;
+      applyCommentDeleted(pid, payload.id);
+    };
+    socket.on('connect', () => {
+      socket.emit('project:join', pid);
+    });
+    socket.on('project_comment:new', onNew);
+    socket.on('project_comment:deleted', onDel);
+    return () => {
+      socket.emit('project:leave', pid);
+      socket.off('project_comment:new', onNew);
+      socket.off('project_comment:deleted', onDel);
+      socket.disconnect();
+    };
+  }, [view, selected?.id, user?.user_id, absorbProjectComment, applyCommentDeleted]);
+
+  const submitProjectComment = useCallback(async () => {
+    if (!user?.user_id || !selected?.id || commentSubmitting) return;
+    const text = commentDraft.trim();
+    if (!text) return;
+    setCommentSubmitting(true);
+    setCommentError(null);
+    try {
+      const { data } = await api.post(`/projects/${selected.id}/comments`, { content: text });
+      setCommentDraft('');
+      absorbProjectComment(data);
+    } catch (err) {
+      setCommentError(err.response?.data?.message || '댓글 등록에 실패했습니다.');
+    } finally {
+      setCommentSubmitting(false);
+    }
+  }, [user?.user_id, selected?.id, commentDraft, commentSubmitting, absorbProjectComment]);
+
+  const deleteProjectCommentRow = useCallback(
+    async (cm) => {
+      if (!user?.user_id || !selected?.id || !cm?.id) return;
+      if (Number(cm.user_id) !== Number(user.user_id)) return;
+      try {
+        await api.delete(`/projects/${selected.id}/comments/${cm.id}`);
+        applyCommentDeleted(selected.id, cm.id);
+      } catch {
+        /* 무시 */
+      }
+    },
+    [user?.user_id, selected?.id, applyCommentDeleted],
+  );
 
   const openEdit = useCallback(() => {
     if (!selected) return;
@@ -317,11 +481,6 @@ export default function TrophyModal({ open, onClose }) {
       window.alert(url);
     }
   };
-
-  const scrollDetailToBottom = useCallback(() => {
-    const el = detailScrollRef.current;
-    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
-  }, []);
 
   if (!open) return null;
 
@@ -526,7 +685,15 @@ export default function TrophyModal({ open, onClose }) {
                 }}
               >
                 <p style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700 }}>
-                  총 {load === 'ok' ? items.length : 0}개의 프로젝트
+                  총{' '}
+                  {load === 'ok' || (load === 'error' && items.length > 0)
+                    ? items.length
+                    : load === 'error'
+                      ? '—'
+                      : load === 'loading'
+                        ? '…'
+                        : 0}
+                  개의 프로젝트
                 </p>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                   <label className="feed-post-meta" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1081,174 +1248,319 @@ export default function TrophyModal({ open, onClose }) {
                 className="trophy-detail-footer"
                 style={{
                   display: 'flex',
-                  flexWrap: 'wrap',
-                  alignItems: 'flex-start',
-                  justifyContent: 'space-between',
-                  gap: 16,
+                  flexDirection: 'column',
+                  gap: 12,
                   paddingTop: 14,
                   marginTop: 4,
                   borderTop: `1px solid ${border}`,
+                  width: '100%',
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, minWidth: 0, flex: '1 1 200px' }}>
-                  <div
-                    style={{
-                      width: 44,
-                      height: 44,
-                      borderRadius: '50%',
-                      overflow: 'hidden',
-                      flexShrink: 0,
-                      background: '#e2e8f0',
-                      border: `1px solid ${border}`,
-                    }}
-                  >
-                    {authorAvatarSrc ? (
-                      <img src={authorAvatarSrc} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    ) : (
-                      <div
-                        style={{
-                          width: '100%',
-                          height: '100%',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: '1.1rem',
-                          color: muted,
-                        }}
-                        aria-hidden
-                      >
-                        👤
-                      </div>
-                    )}
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <span style={{ fontWeight: 800, fontSize: '0.95rem', color: 'var(--feed-text-primary)' }}>
-                        {authorName}
-                      </span>
-                      {(() => {
-                        const contribs = selected.contributors || [];
-                        const multi = contribs.length >= 2;
-                        const shown = multi && !contributorExpand ? contribs.slice(0, 2) : contribs;
-                        return (
-                          <>
-                            {multi ? (
-                              <button
-                                type="button"
-                                onClick={() => setContributorExpand((v) => !v)}
-                                aria-label={contributorExpand ? '기여자 접기' : '기여자 펼치기'}
-                                style={{
-                                  width: 26,
-                                  height: 26,
-                                  borderRadius: '50%',
-                                  border: 'none',
-                                  background: '#0f172a',
-                                  color: '#fff',
-                                  cursor: 'pointer',
-                                  fontSize: '1rem',
-                                  lineHeight: 1,
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  flexShrink: 0,
-                                  padding: 0,
-                                  fontWeight: 700,
-                                }}
-                              >
-                                {contributorExpand ? '−' : '+'}
-                              </button>
-                            ) : null}
-                            {shown.map((c) => (
-                              <div
-                                key={c.user_id}
-                                title={c.nickname || undefined}
-                                style={{
-                                  width: 26,
-                                  height: 26,
-                                  borderRadius: '50%',
-                                  overflow: 'hidden',
-                                  border: `1px solid ${border}`,
-                                  flexShrink: 0,
-                                  background: '#f1f5f9',
-                                }}
-                              >
-                                {c.avatar_url ? (
-                                  <img src={c.avatar_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                                ) : null}
-                              </div>
-                            ))}
-                          </>
-                        );
-                      })()}
+                <div
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    alignItems: 'flex-start',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                    width: '100%',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, minWidth: 0, flex: '1 1 200px' }}>
+                    <div
+                      style={{
+                        width: 44,
+                        height: 44,
+                        borderRadius: '50%',
+                        overflow: 'hidden',
+                        flexShrink: 0,
+                        background: '#e2e8f0',
+                        border: `1px solid ${border}`,
+                      }}
+                    >
+                      {authorAvatarSrc ? (
+                        <img src={authorAvatarSrc} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      ) : (
+                        <div
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: '1.1rem',
+                            color: muted,
+                          }}
+                          aria-hidden
+                        >
+                          👤
+                        </div>
+                      )}
                     </div>
-                    {isOwnProject && user?.bio ? (
-                      <p
-                        className="feed-post-meta"
-                        style={{ margin: '4px 0 0', fontSize: '0.78rem', lineHeight: 1.45, whiteSpace: 'pre-wrap' }}
-                      >
-                        {user.bio}
-                      </p>
-                    ) : null}
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <span style={{ fontWeight: 800, fontSize: '0.95rem', color: 'var(--feed-text-primary)' }}>
+                          {authorName}
+                        </span>
+                        {(() => {
+                          const contribs = selected.contributors || [];
+                          const multi = contribs.length >= 2;
+                          const shown = multi && !contributorExpand ? contribs.slice(0, 2) : contribs;
+                          return (
+                            <>
+                              {multi ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setContributorExpand((v) => !v)}
+                                  aria-label={contributorExpand ? '기여자 접기' : '기여자 펼치기'}
+                                  style={{
+                                    width: 26,
+                                    height: 26,
+                                    borderRadius: '50%',
+                                    border: 'none',
+                                    background: '#0f172a',
+                                    color: '#fff',
+                                    cursor: 'pointer',
+                                    fontSize: '1rem',
+                                    lineHeight: 1,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    flexShrink: 0,
+                                    padding: 0,
+                                    fontWeight: 700,
+                                  }}
+                                >
+                                  {contributorExpand ? '−' : '+'}
+                                </button>
+                              ) : null}
+                              {shown.map((c) => (
+                                <div
+                                  key={c.user_id}
+                                  title={c.nickname || undefined}
+                                  style={{
+                                    width: 26,
+                                    height: 26,
+                                    borderRadius: '50%',
+                                    overflow: 'hidden',
+                                    border: `1px solid ${border}`,
+                                    flexShrink: 0,
+                                    background: '#f1f5f9',
+                                  }}
+                                >
+                                  {c.avatar_url ? (
+                                    <img src={c.avatar_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                  ) : null}
+                                </div>
+                              ))}
+                            </>
+                          );
+                        })()}
+                      </div>
+                      {isOwnProject && user?.bio ? (
+                        <p
+                          className="feed-post-meta"
+                          style={{ margin: '4px 0 0', fontSize: '0.78rem', lineHeight: 1.45, whiteSpace: 'pre-wrap' }}
+                        >
+                          {user.bio}
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div className="feed-post-meta" style={{ fontSize: '0.75rem', flexShrink: 0 }}>
+                    마지막 업데이트 {formatYmd(selected.updated_at) || '—'}
                   </div>
                 </div>
 
                 <div
                   style={{
                     display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'flex-end',
+                    flexWrap: 'wrap',
+                    alignItems: 'stretch',
                     gap: 8,
-                    flexShrink: 0,
-                    maxWidth: '100%',
+                    width: '100%',
                   }}
                 >
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end' }}>
-                    <button
-                      type="button"
-                      onClick={handleShare}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 6,
-                        minHeight: 40,
-                        padding: '0 18px',
-                        borderRadius: 999,
-                        border: `1px solid ${border}`,
-                        background: 'var(--feed-bg-card, #fff)',
-                        cursor: 'pointer',
-                        fontWeight: 700,
-                        fontSize: '0.82rem',
-                        color: 'var(--feed-text-primary)',
-                      }}
-                    >
-                      공유하기
-                    </button>
-                    <button
-                      type="button"
-                      onClick={scrollDetailToBottom}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 6,
-                        minHeight: 40,
-                        padding: '0 18px',
-                        borderRadius: 999,
-                        border: 'none',
-                        background: '#2563eb',
-                        color: '#fff',
-                        cursor: 'pointer',
-                        fontWeight: 700,
-                        fontSize: '0.82rem',
-                      }}
-                    >
-                      댓글달기
-                    </button>
-                  </div>
-                  <div className="feed-post-meta" style={{ fontSize: '0.75rem', textAlign: 'right' }}>
-                    마지막 업데이트 {formatYmd(selected.updated_at) || '—'}
-                  </div>
+                  <textarea
+                    value={commentDraft}
+                    onChange={(e) => setCommentDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        submitProjectComment();
+                      }
+                    }}
+                    placeholder="댓글을 입력하세요 (Shift+Enter 줄바꿈)"
+                    rows={2}
+                    disabled={!user?.user_id || commentSubmitting}
+                    style={{
+                      flex: '1 1 220px',
+                      minWidth: 0,
+                      resize: 'vertical',
+                      padding: '10px 12px',
+                      borderRadius: 10,
+                      border: `1px solid ${border}`,
+                      background: 'var(--feed-bg-page, #f8fafc)',
+                      color: 'var(--feed-text-primary)',
+                      fontSize: '0.85rem',
+                      lineHeight: 1.45,
+                      fontFamily: 'inherit',
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={submitProjectComment}
+                    disabled={!user?.user_id || commentSubmitting}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 6,
+                      minHeight: 40,
+                      padding: '0 18px',
+                      borderRadius: 999,
+                      border: 'none',
+                      background: !user?.user_id || commentSubmitting ? '#94a3b8' : '#2563eb',
+                      color: '#fff',
+                      cursor: !user?.user_id || commentSubmitting ? 'not-allowed' : 'pointer',
+                      fontWeight: 700,
+                      fontSize: '0.82rem',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {commentSubmitting ? '등록 중…' : '댓글달기'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleShare}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 6,
+                      minHeight: 40,
+                      padding: '0 18px',
+                      borderRadius: 999,
+                      border: `1px solid ${border}`,
+                      background: 'var(--feed-bg-card, #fff)',
+                      cursor: 'pointer',
+                      fontWeight: 700,
+                      fontSize: '0.82rem',
+                      color: 'var(--feed-text-primary)',
+                      flexShrink: 0,
+                    }}
+                  >
+                    공유하기
+                  </button>
+                </div>
+
+                {commentError ? (
+                  <p style={{ margin: 0, fontSize: '0.82rem', color: '#dc2626' }}>{commentError}</p>
+                ) : null}
+                {!user?.user_id ? (
+                  <p className="feed-post-meta" style={{ margin: 0, fontSize: '0.8rem' }}>
+                    로그인 후 댓글을 남길 수 있어요.
+                  </p>
+                ) : null}
+
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 10,
+                    width: '100%',
+                    maxHeight: 280,
+                    overflowY: 'auto',
+                  }}
+                >
+                  {projectComments.map((cm) => {
+                    const av = cm.avatar_url ? resolveMediaUrl(cm.avatar_url) : '';
+                    const canDelete = user?.user_id != null && Number(cm.user_id) === Number(user.user_id);
+                    return (
+                      <div
+                        key={cm.id}
+                        style={{
+                          display: 'flex',
+                          gap: 10,
+                          alignItems: 'flex-start',
+                          padding: '8px 0',
+                          borderBottom: `1px solid ${border}`,
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: 36,
+                            height: 36,
+                            borderRadius: '50%',
+                            overflow: 'hidden',
+                            flexShrink: 0,
+                            background: '#e2e8f0',
+                            border: `1px solid ${border}`,
+                          }}
+                        >
+                          {av ? (
+                            <img src={av} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          ) : (
+                            <div
+                              style={{
+                                width: '100%',
+                                height: '100%',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: '0.9rem',
+                                color: muted,
+                              }}
+                              aria-hidden
+                            >
+                              👤
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
+                            <span style={{ fontWeight: 700, fontSize: '0.88rem', color: 'var(--feed-text-primary)' }}>
+                              {cm.nickname || '—'}
+                            </span>
+                            <span className="feed-post-meta" style={{ fontSize: '0.72rem' }}>
+                              {formatCommentAgo(cm.created_at)}
+                            </span>
+                          </div>
+                          <p
+                            style={{
+                              margin: 0,
+                              fontSize: '0.84rem',
+                              lineHeight: 1.45,
+                              whiteSpace: 'pre-wrap',
+                              color: 'var(--feed-text-primary)',
+                            }}
+                          >
+                            {cm.content}
+                          </p>
+                        </div>
+                        {canDelete ? (
+                          <button
+                            type="button"
+                            aria-label="댓글 삭제"
+                            title="삭제"
+                            onClick={() => deleteProjectCommentRow(cm)}
+                            style={{
+                              flexShrink: 0,
+                              border: 'none',
+                              background: 'transparent',
+                              color: muted,
+                              cursor: 'pointer',
+                              fontSize: '1.15rem',
+                              lineHeight: 1,
+                              padding: '2px 6px',
+                            }}
+                          >
+                            ×
+                          </button>
+                        ) : null}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>

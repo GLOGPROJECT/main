@@ -38,6 +38,17 @@ function authorNotBlockedWhere(viewerId, blockedIds) {
   };
 }
 
+let __engagementBackfillDone = false;
+async function backfillEngagementScoresOnce() {
+  if (__engagementBackfillDone) return;
+  try {
+    await prisma.$executeRaw`UPDATE posts SET engagement_score = IFNULL(like_count, 0) + IFNULL(comment_count, 0)`;
+  } catch {
+    /* 스키마 미반영 등 */
+  }
+  __engagementBackfillDone = true;
+}
+
 async function buildCursorWherePopular(lastPostId) {
   if (lastPostId === undefined || lastPostId === null || lastPostId === '') {
     return {};
@@ -50,20 +61,20 @@ async function buildCursorWherePopular(lastPostId) {
   }
   const anchor = await prisma.post.findFirst({
     where: { post_id: id, is_deleted: false },
-    select: { post_id: true, created_at: true, like_count: true },
+    select: { post_id: true, created_at: true, engagement_score: true },
   });
   if (!anchor) {
     const e = new Error('INVALID_CURSOR');
     e.code = 'INVALID_CURSOR';
     throw e;
   }
-  const lc = Number(anchor.like_count ?? 0);
+  const eng = Number(anchor.engagement_score ?? 0);
   return {
     OR: [
-      { like_count: { lt: lc } },
+      { engagement_score: { lt: eng } },
       {
         AND: [
-          { like_count: lc },
+          { engagement_score: eng },
           {
             OR: [
               { created_at: { lt: anchor.created_at } },
@@ -280,6 +291,7 @@ async function queryPostsPage({ where, viewerId, last_post_id, limit, publicBase
   const take = limit + 1;
   const blockedIds = await getBlockedUserIds(viewerId);
   const popular = String(sort).toLowerCase() === 'popular';
+  if (popular) await backfillEngagementScoresOnce();
   const cursorWhere = popular ? await buildCursorWherePopular(last_post_id) : await buildCursorWhere(last_post_id);
 
   const mergedWhere = {
@@ -287,7 +299,7 @@ async function queryPostsPage({ where, viewerId, last_post_id, limit, publicBase
   };
 
   const orderBy = popular
-    ? [{ like_count: 'desc' }, { created_at: 'desc' }, { post_id: 'desc' }]
+    ? [{ engagement_score: 'desc' }, { created_at: 'desc' }, { post_id: 'desc' }]
     : [{ created_at: 'desc' }, { post_id: 'desc' }];
 
   const rows = await prisma.post.findMany({
@@ -307,14 +319,16 @@ async function queryPostsPage({ where, viewerId, last_post_id, limit, publicBase
   };
 }
 
-async function listPublicFeed({ last_post_id, limit: limitRaw }, viewerId, publicBase) {
+async function listPublicFeed({ last_post_id, limit: limitRaw, sort: sortRaw }, viewerId, publicBase) {
   const limit = clampLimit(limitRaw);
+  const sort = String(sortRaw || '').toLowerCase() === 'popular' ? 'popular' : 'latest';
   return queryPostsPage({
     where: { is_deleted: false, type: { in: ['public', 'anonymous'] } },
     viewerId,
     last_post_id,
     limit,
     publicBase,
+    sort,
   });
 }
 
@@ -337,8 +351,9 @@ async function listAnonymousFeed({ last_post_id, limit: limitRaw, q: qRaw, sort:
   });
 }
 
-async function listFollowingFeed({ last_post_id, limit: limitRaw }, viewerId, publicBase) {
+async function listFollowingFeed({ last_post_id, limit: limitRaw, sort: sortRaw }, viewerId, publicBase) {
   const limit = clampLimit(limitRaw);
+  const sort = String(sortRaw || '').toLowerCase() === 'popular' ? 'popular' : 'latest';
   const follows = await prisma.follow.findMany({
     where: { follower_id: viewerId },
     select: { following_id: true },
@@ -373,6 +388,7 @@ async function listFollowingFeed({ last_post_id, limit: limitRaw }, viewerId, pu
     last_post_id,
     limit,
     publicBase,
+    sort,
   });
   return {
     ...page,
@@ -449,7 +465,8 @@ async function listUserFeed(targetUserId, { last_post_id, limit: limitRaw, sort:
 
 async function toggleLikePost(userId, postId) {
   return prisma.$transaction(async (tx) => {
-    const rows = await tx.$queryRaw`SELECT post_id, like_count, is_deleted FROM posts WHERE post_id = ${postId} LIMIT 1 FOR UPDATE`;
+    const rows =
+      await tx.$queryRaw`SELECT post_id, like_count, comment_count, is_deleted FROM posts WHERE post_id = ${postId} LIMIT 1 FOR UPDATE`;
     const row = rows[0];
     if (!row) {
       throw err('POST_NOT_FOUND', '게시글을 찾을 수 없습니다.', 404);
@@ -462,6 +479,9 @@ async function toggleLikePost(userId, postId) {
     let likeCount = row.like_count;
     if (typeof likeCount === 'bigint') likeCount = Number(likeCount);
     else likeCount = Number(likeCount ?? 0);
+    let commentCount = row.comment_count;
+    if (typeof commentCount === 'bigint') commentCount = Number(commentCount);
+    else commentCount = Number(commentCount ?? 0);
 
     const existing = await tx.postLike.findFirst({
       where: { user_id: userId, post_id: postId },
@@ -473,7 +493,7 @@ async function toggleLikePost(userId, postId) {
       const next = Math.max(0, likeCount - 1);
       await tx.post.update({
         where: { post_id: postId },
-        data: { like_count: next },
+        data: { like_count: next, engagement_score: next + commentCount },
       });
       return { liked: false, likeCount: next };
     }
@@ -484,7 +504,7 @@ async function toggleLikePost(userId, postId) {
     const next = likeCount + 1;
     await tx.post.update({
       where: { post_id: postId },
-      data: { like_count: next },
+      data: { like_count: next, engagement_score: next + commentCount },
     });
     return { liked: true, likeCount: next };
   });

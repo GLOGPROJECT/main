@@ -52,3 +52,14 @@ export function getAnonAvatarIndex(post) {
   if (isAnonymousPost(post)) return getStableAnonIndexFromPostId(post.id);
   return 0;
 }
+
+/** 익명 글 댓글: 같은 유저·같은 글이면 항상 동일 아바타(백엔드 `stableAnonCommentAvatarIndex`와 동일 규칙) */
+export function getStableAnonIndexForComment(userId, postId) {
+  if (userId == null || postId == null) return 0;
+  const s = `${Number(userId)}:${Number(postId)}`;
+  let hash = 0;
+  for (let i = 0; i < s.length; i += 1) {
+    hash = (Math.imul(31, hash) + s.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash) % ANON_AVATAR_COUNT;
+}

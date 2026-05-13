@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/hooks/useAuth';
 import api from '../api/axios';
+import { getAppSocket } from '../realtime/appSocket';
 import { LoginModalProvider } from '../feed/auth/LoginModalContext';
 import ProjectRegisterModal from '../feed/components/ProjectRegisterModal';
 import { useFeedTheme } from '../feed/theme/ThemeContext';
@@ -40,25 +41,63 @@ export default function ProfilePage() {
 
   const isMyProfile = userId === 'me' || (me && me.user_id === parseInt(userId));
 
-  useEffect(() => {
-    const fetchProfile = async () => {
-      try {
-        setLoading(true);
-        const endpoint = isMyProfile ? '/users/me/profile' : `/users/${userId}`;
-        const { data } = await api.get(endpoint);
-        setProfile(data);
-      } catch (err) {
-        if (err.response?.status === 404) {
-          setError('존재하지 않는 유저입니다.');
-        } else {
-          setError('프로필을 불러오지 못했습니다.');
-        }
-      } finally {
-        setLoading(false);
+  const fetchProfile = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const endpoint = isMyProfile ? '/users/me/profile' : `/users/${userId}`;
+      const { data } = await api.get(endpoint);
+      setProfile(data);
+    } catch (err) {
+      if (err.response?.status === 404) {
+        setError('존재하지 않는 유저입니다.');
+      } else {
+        setError('프로필을 불러오지 못했습니다.');
       }
-    };
+    } finally {
+      setLoading(false);
+    }
+  }, [isMyProfile, userId]);
+
+  useEffect(() => {
     fetchProfile();
-  }, [userId, isMyProfile]);
+  }, [fetchProfile]);
+
+  // 실시간 갱신: 피드/프로젝트/트로피 변경 이벤트 수신 시 프로필 재조회
+  // (충돌 방지: state를 직접 조작하지 않고, 기존 fetchProfile만 재호출)
+  const lastRealtimeRefreshAt = useRef(0);
+  useEffect(() => {
+    const token = window.__accessToken;
+    if (!me?.user_id || !token) return undefined;
+
+    const socket = getAppSocket();
+    if (!socket) return undefined;
+    const bump = () => {
+      const now = Date.now();
+      // 이벤트가 연속으로 올 때 과도한 API 호출 방지(최소 600ms 간격)
+      if (now - lastRealtimeRefreshAt.current < 600) return;
+      lastRealtimeRefreshAt.current = now;
+      void fetchProfile();
+    };
+
+    socket.on('feed_post:new', bump);
+    socket.on('feed_post:updated', bump);
+    socket.on('feed_post:deleted', bump);
+    socket.on('feed_comment:new', bump);
+    socket.on('feed_comment:deleted', bump);
+    socket.on('project:changed', bump);
+    socket.on('trophy:like_changed', bump);
+
+    return () => {
+      socket.off('feed_post:new', bump);
+      socket.off('feed_post:updated', bump);
+      socket.off('feed_post:deleted', bump);
+      socket.off('feed_comment:new', bump);
+      socket.off('feed_comment:deleted', bump);
+      socket.off('project:changed', bump);
+      socket.off('trophy:like_changed', bump);
+    };
+  }, [me?.user_id, fetchProfile]);
 
   const handleStreakSync = async () => {
     setStreakSyncing(true);

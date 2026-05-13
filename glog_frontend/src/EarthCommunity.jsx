@@ -28,14 +28,17 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useGLTF, Html, OrbitControls, useAnimations } from "@react-three/drei";
 import { SkeletonUtils } from "three-stdlib";
 import { useLocation, useNavigate } from "react-router-dom";
+import { io } from "socket.io-client";
 import { useAuth } from "./auth/hooks/useAuth";
 import api, { API_ORIGIN } from "./api/axios";
+import { getAppSocket } from "./realtime/appSocket";
 import DmPanel from "./dm/DmPanel";
 import { useDmSocket } from "./dm/useDmSocket";
 import PetShopModal from "./petshop/petShopModal";
 import DailyRewardModal from "./daily-reward/DailyRewardModal";
 import PostCard, { HeartIcon } from "./feed/components/PostCard";
 import CommentSection from "./feed/components/CommentSection";
+import { isAnonymousPost } from "./feed/utils/anonAvatar";
 import { fetchPostById, togglePostLike, toggleTrophyLike } from "./feed/api/feedApi";
 import { streakBadgeEmoji } from "./utils/streakBadgeEmoji";
 import ProjectRegisterModal from "./feed/components/ProjectRegisterModal";
@@ -347,6 +350,18 @@ function resolveMediaUrl(path) {
   return s;
 }
 
+function formatGlobeProjectCommentAgo(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const diffMin = Math.max(0, Math.floor((Date.now() - d.getTime()) / 60000));
+  if (diffMin < 1) return '방금';
+  if (diffMin < 60) return `${diffMin}분 전`;
+  const h = Math.floor(diffMin / 60);
+  if (h < 24) return `${h}시간 전`;
+  return `${Math.floor(h / 24)}일 전`;
+}
+
 /** 대표 이미지 필드에 여러 경로가 있을 때 캐러셀용 URL 목록 */
 function parseProjectImageGalleryUrls(raw) {
   if (raw == null) return [];
@@ -514,6 +529,12 @@ export default function EarthCommunity() {
   const [globeProjectTagsExpanded, setGlobeProjectTagsExpanded] = useState(false);
   const [globeProjectShareHint, setGlobeProjectShareHint] = useState('');
   const globeProjectCommentsRef = useRef(null);
+  const [globeProjComments, setGlobeProjComments] = useState([]);
+  const [globeProjCommentDraft, setGlobeProjCommentDraft] = useState('');
+  const [globeProjCommentBusy, setGlobeProjCommentBusy] = useState(false);
+  const [globeProjCommentErr, setGlobeProjCommentErr] = useState('');
+  const globeProjAbsorbedIdsRef = useRef(new Set());
+  const globeProjDeleteDedupRef = useRef(new Set());
   const [trophyRefreshKey, setTrophyRefreshKey] = useState(0);
   const [earthPanelPostListRefreshKey, setEarthPanelPostListRefreshKey] = useState(0);
   const [globeModalPost, setGlobeModalPost] = useState(null);
@@ -533,6 +554,48 @@ export default function EarthCommunity() {
   const { openTrophyModal } = useTrophyModal();
   // 소켓/DmPanel에서 내 userId 식별용 — GlobalTopNav가 없는 globe 페이지에서 직접 세팅
   if (me) window.__myUserId = me.user_id;
+
+  // 피드(공개/익명) 글·댓글 실시간 반영: 프로필 패널이 열려 있을 때만 리패치 트리거
+  useEffect(() => {
+    if (!me?.user_id) return undefined;
+    const socket = getAppSocket();
+    if (!socket) return undefined;
+
+    const bumpIfPanelOpen = () => {
+      if (!selectedUser) return;
+      setEarthPanelPostListRefreshKey((k) => k + 1);
+    };
+
+    socket.on('feed_post:new', bumpIfPanelOpen);
+    socket.on('feed_post:updated', bumpIfPanelOpen);
+    socket.on('feed_post:deleted', bumpIfPanelOpen);
+    socket.on('feed_comment:new', bumpIfPanelOpen);
+    socket.on('feed_comment:deleted', bumpIfPanelOpen);
+
+    return () => {
+      socket.off('feed_post:new', bumpIfPanelOpen);
+      socket.off('feed_post:updated', bumpIfPanelOpen);
+      socket.off('feed_post:deleted', bumpIfPanelOpen);
+      socket.off('feed_comment:new', bumpIfPanelOpen);
+      socket.off('feed_comment:deleted', bumpIfPanelOpen);
+    };
+  }, [me?.user_id, selectedUser]);
+
+  // 트로피/프로젝트 목록 실시간 반영: 우측 패널/프로젝트 미리보기에서 바로 갱신
+  useEffect(() => {
+    if (!me?.user_id) return undefined;
+    const socket = getAppSocket();
+    if (!socket) return undefined;
+
+    const bumpTrophy = () => setTrophyRefreshKey((k) => k + 1);
+    socket.on('project:changed', bumpTrophy);
+    socket.on('trophy:like_changed', bumpTrophy);
+
+    return () => {
+      socket.off('project:changed', bumpTrophy);
+      socket.off('trophy:like_changed', bumpTrophy);
+    };
+  }, [me?.user_id]);
 
   // 마커 클릭과 빈 배경 클릭을 구분하기 위한 ref
   // 마커 클릭 시 true로 설정 → 캔버스 onClick에서 패널 닫힘 방지
@@ -675,11 +738,137 @@ export default function EarthCommunity() {
   useEffect(() => {
     if (!globeProjectPreview) {
       setGlobeProjectShareHint('');
+      setGlobeProjComments([]);
+      globeProjAbsorbedIdsRef.current = new Set();
+      globeProjDeleteDedupRef.current = new Set();
+      setGlobeProjCommentDraft('');
+      setGlobeProjCommentErr('');
       return;
     }
     setGlobeProjectSlideIdx(0);
     setGlobeProjectTagsExpanded(false);
   }, [globeProjectPreview?.id]);
+
+  useEffect(() => {
+    const bump = () => setTrophyRefreshKey((k) => k + 1);
+    window.addEventListener('glog:trophy-project-comments', bump);
+    return () => window.removeEventListener('glog:trophy-project-comments', bump);
+  }, []);
+
+  useEffect(() => {
+    if (!globeProjectPreview?.id) return undefined;
+    let cancelled = false;
+    const pid = globeProjectPreview.id;
+    globeProjAbsorbedIdsRef.current = new Set();
+    globeProjDeleteDedupRef.current = new Set();
+    api
+      .get(`/projects/${pid}/comments`)
+      .then(({ data }) => {
+        if (cancelled) return;
+        const arr = Array.isArray(data?.comments) ? data.comments : [];
+        setGlobeProjComments(arr);
+        globeProjAbsorbedIdsRef.current = new Set(arr.map((x) => Number(x.id)));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setGlobeProjComments([]);
+          globeProjAbsorbedIdsRef.current = new Set();
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [globeProjectPreview?.id]);
+
+  const absorbGlobeProjectComment = useCallback((c) => {
+    if (!c?.id || c.project_id == null) return;
+    const pid = Number(c.project_id);
+    const idNum = Number(c.id);
+    if (globeProjAbsorbedIdsRef.current.has(idNum)) return;
+    globeProjAbsorbedIdsRef.current.add(idNum);
+    setGlobeProjComments((prev) =>
+      [...prev, c].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
+    );
+    setGlobeProjectPreview((prev) =>
+      prev && Number(prev.id) === pid ? { ...prev, comments: Number(prev.comments ?? 0) + 1 } : prev,
+    );
+    setTrophyRefreshKey((k) => k + 1);
+  }, []);
+
+  const applyGlobeCommentDeleted = useCallback((projectId, commentId) => {
+    const pid = Number(projectId);
+    const cid = Number(commentId);
+    const key = `${pid}:${cid}`;
+    if (globeProjDeleteDedupRef.current.has(key)) return;
+    globeProjDeleteDedupRef.current.add(key);
+    globeProjAbsorbedIdsRef.current.delete(cid);
+    setGlobeProjComments((prev) => prev.filter((x) => Number(x.id) !== cid));
+    setGlobeProjectPreview((prev) =>
+      prev && Number(prev.id) === pid
+        ? { ...prev, comments: Math.max(0, Number(prev.comments ?? 0) - 1) }
+        : prev,
+    );
+    setTrophyRefreshKey((k) => k + 1);
+  }, []);
+
+  useEffect(() => {
+    if (!globeProjectPreview?.id || !me?.user_id) return undefined;
+    const token = window.__accessToken;
+    if (!token) return undefined;
+    const pid = globeProjectPreview.id;
+    const socket = io(API_ORIGIN, { auth: { token } });
+    const onNew = (c) => {
+      if (!c || Number(c.project_id) !== Number(pid)) return;
+      absorbGlobeProjectComment(c);
+    };
+    const onDel = (payload) => {
+      if (!payload || Number(payload.project_id) !== Number(pid)) return;
+      applyGlobeCommentDeleted(pid, payload.id);
+    };
+    socket.on('connect', () => {
+      socket.emit('project:join', pid);
+    });
+    socket.on('project_comment:new', onNew);
+    socket.on('project_comment:deleted', onDel);
+    return () => {
+      socket.emit('project:leave', pid);
+      socket.off('project_comment:new', onNew);
+      socket.off('project_comment:deleted', onDel);
+      socket.disconnect();
+    };
+  }, [globeProjectPreview?.id, me?.user_id, absorbGlobeProjectComment, applyGlobeCommentDeleted]);
+
+  const submitGlobeProjectComment = useCallback(async () => {
+    if (!me?.user_id || !globeProjectPreview?.id || globeProjCommentBusy) return;
+    const text = globeProjCommentDraft.trim();
+    if (!text) return;
+    setGlobeProjCommentBusy(true);
+    setGlobeProjCommentErr('');
+    try {
+      const { data } = await api.post(`/projects/${globeProjectPreview.id}/comments`, { content: text });
+      setGlobeProjCommentDraft('');
+      absorbGlobeProjectComment(data);
+    } catch (err) {
+      const msg = err?.response?.data?.message || err?.message || '댓글 등록에 실패했습니다.';
+      setGlobeProjCommentErr(String(msg));
+    } finally {
+      setGlobeProjCommentBusy(false);
+    }
+  }, [me?.user_id, globeProjectPreview?.id, globeProjCommentDraft, globeProjCommentBusy, absorbGlobeProjectComment]);
+
+  const deleteGlobeProjectCommentRow = useCallback(
+    async (cm) => {
+      if (!me?.user_id || !globeProjectPreview?.id || !cm?.id) return;
+      if (Number(cm.user_id) !== Number(me.user_id)) return;
+      try {
+        await api.delete(`/projects/${globeProjectPreview.id}/comments/${cm.id}`);
+        applyGlobeCommentDeleted(globeProjectPreview.id, cm.id);
+      } catch {
+        /* 무시 */
+      }
+    },
+    [me?.user_id, globeProjectPreview?.id, applyGlobeCommentDeleted],
+  );
 
   const globeProjectGallery = useMemo(() => {
     const p = globeProjectPreview;
@@ -839,22 +1028,6 @@ export default function EarthCommunity() {
                 }}
                 groupRef={earthRef}
                 dragRef={dragRef}
-                users={[
-                  // 로그인한 내 정보 (globe_lat/lon이 있을 때만 포함)
-                  ...(me?.globe_lat && me?.globe_lon ? [{
-                    id: me.user_id,
-                    name: me.nickname,
-                    bio: me.bio || '',
-                    avatar_url: me.avatar_url,
-                    lat: parseFloat(me.globe_lat),
-                    lon: parseFloat(me.globe_lon),
-                    color: '#4e9af1',
-                    status: me.status || 'offline',
-                    isMe: true,
-                  }] : []),
-                  // DB에서 불러온 다른 유저들 (본인 제외)
-                  ...globeUsers.filter((u) => u.id !== me?.user_id),
-                ]}
               />
             </Suspense>
             <CameraRig selectedUser={selectedUser} earthRef={earthRef} zoomRef={zoomRef} />
@@ -1022,6 +1195,7 @@ export default function EarthCommunity() {
                   <div className="feed-post-popup-modal-comments-wrap">
                     <CommentSection
                       postId={String(globePostModalId)}
+                      anonymousThread={Boolean(globeModalPost && isAnonymousPost(globeModalPost))}
                       onCommentCountChange={bumpGlobeModalCommentCount}
                       intersectionRoot={globeModalScrollRoot}
                     />
@@ -1494,25 +1668,6 @@ export default function EarthCommunity() {
                   >
                     공유하기
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      globeProjectCommentsRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-                      globeProjectCommentsRef.current?.focus?.();
-                    }}
-                    style={{
-                      padding: "6px 14px",
-                      fontSize: "0.78rem",
-                      fontWeight: 700,
-                      borderRadius: 8,
-                      border: "none",
-                      background: "#2563eb",
-                      color: "#fff",
-                      cursor: "pointer",
-                    }}
-                  >
-                    댓글달기
-                  </button>
                 </div>
               </div>
               <div style={{ width: "100%", textAlign: "right", marginTop: 8 }}>
@@ -1525,8 +1680,119 @@ export default function EarthCommunity() {
                   <p style={{ margin: "4px 0 0", fontSize: "0.72rem", color: "#2563eb" }}>{globeProjectShareHint}</p>
                 ) : null}
               </div>
-              <div ref={globeProjectCommentsRef} tabIndex={-1} style={{ outline: "none", marginTop: 10 }}>
-                <p style={{ margin: 0, fontSize: "0.76rem", color: "#94a3b8" }}>프로젝트 댓글은 준비 중이에요.</p>
+              <div ref={globeProjectCommentsRef} tabIndex={-1} style={{ outline: "none", marginTop: 14 }}>
+                <div style={{ fontWeight: 700, fontSize: "0.84rem", color: "#0f172a", marginBottom: 8 }}>댓글</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "stretch", marginBottom: 8 }}>
+                  <textarea
+                    value={globeProjCommentDraft}
+                    onChange={(e) => setGlobeProjCommentDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        submitGlobeProjectComment();
+                      }
+                    }}
+                    placeholder="댓글을 입력하세요 (Shift+Enter 줄바꿈)"
+                    rows={2}
+                    disabled={!me?.user_id || globeProjCommentBusy}
+                    style={{
+                      flex: "1 1 200px",
+                      minWidth: 0,
+                      resize: "vertical",
+                      padding: "8px 10px",
+                      borderRadius: 8,
+                      border: "1px solid rgba(15,23,42,0.12)",
+                      fontSize: "0.8rem",
+                      fontFamily: "inherit",
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={submitGlobeProjectComment}
+                    disabled={!me?.user_id || globeProjCommentBusy || !globeProjCommentDraft.trim()}
+                    style={{
+                      padding: "8px 16px",
+                      fontSize: "0.78rem",
+                      fontWeight: 700,
+                      borderRadius: 999,
+                      border: "none",
+                      background: !me?.user_id || globeProjCommentBusy ? "#94a3b8" : "#2563eb",
+                      color: "#fff",
+                      cursor: !me?.user_id || globeProjCommentBusy ? "not-allowed" : "pointer",
+                      alignSelf: "flex-end",
+                    }}
+                  >
+                    {globeProjCommentBusy ? "등록 중…" : "댓글달기"}
+                  </button>
+                </div>
+                {!me?.user_id ? (
+                  <p style={{ margin: "0 0 8px", fontSize: "0.74rem", color: "#64748b" }}>로그인 후 댓글을 남길 수 있어요.</p>
+                ) : null}
+                {globeProjCommentErr ? (
+                  <p style={{ margin: "0 0 8px", fontSize: "0.74rem", color: "#dc2626" }}>{globeProjCommentErr}</p>
+                ) : null}
+                <div style={{ maxHeight: 240, overflowY: "auto", borderTop: "1px solid rgba(15,23,42,0.08)", paddingTop: 6 }}>
+                  {globeProjComments.map((cm) => {
+                    const av = cm.avatar_url ? resolveMediaUrl(cm.avatar_url) : null;
+                    const canDel = me?.user_id != null && Number(cm.user_id) === Number(me.user_id);
+                    return (
+                      <div
+                        key={cm.id}
+                        style={{
+                          display: "flex",
+                          gap: 10,
+                          alignItems: "flex-start",
+                          padding: "8px 0",
+                          borderBottom: "1px solid rgba(15,23,42,0.06)",
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: 34,
+                            height: 34,
+                            borderRadius: "50%",
+                            overflow: "hidden",
+                            flexShrink: 0,
+                            background: "#e2e8f0",
+                          }}
+                        >
+                          {av ? (
+                            <img src={av} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                          ) : null}
+                        </div>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "baseline", marginBottom: 4 }}>
+                            <span style={{ fontWeight: 700, fontSize: "0.8rem", color: "#0f172a" }}>{cm.nickname || "—"}</span>
+                            <span style={{ fontSize: "0.7rem", color: "#94a3b8" }}>{formatGlobeProjectCommentAgo(cm.created_at)}</span>
+                          </div>
+                          <p style={{ margin: 0, fontSize: "0.78rem", color: "#334155", whiteSpace: "pre-wrap", lineHeight: 1.45 }}>
+                            {cm.content}
+                          </p>
+                        </div>
+                        {canDel ? (
+                          <button
+                            type="button"
+                            aria-label="댓글 삭제"
+                            title="삭제"
+                            onClick={() => deleteGlobeProjectCommentRow(cm)}
+                            style={{
+                              flexShrink: 0,
+                              border: "none",
+                              background: "transparent",
+                              color: "#94a3b8",
+                              cursor: "pointer",
+                              fontSize: "1.1rem",
+                              lineHeight: 1,
+                              padding: "2px 4px",
+                            }}
+                          >
+                            ×
+                          </button>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           </div>
@@ -1652,7 +1918,6 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
       })
       .catch(() => {
         if (!cancelled) {
-          setTrophyList([]);
           setTrophiesLoad('error');
         }
       });
@@ -1966,7 +2231,15 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
               </div>
               <div style={{ width: 1, height: 22, background: 'rgba(0,0,0,0.1)', flexShrink: 0 }} />
               <div style={{ flex: 1, textAlign: 'center' }}>
-                <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#0f1c36' }}>{trophiesLoad === 'ok' ? trophyList.length : 0}</div>
+                <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#0f1c36' }}>
+                  {trophiesLoad === 'ok' || (trophiesLoad === 'error' && trophyList.length > 0)
+                    ? trophyList.length
+                    : trophiesLoad === 'error'
+                      ? '—'
+                      : trophiesLoad === 'loading'
+                        ? '…'
+                        : 0}
+                </div>
                 <div style={{ fontSize: '0.62rem', color: '#9ca3af', marginTop: 2 }}>프로젝트</div>
               </div>
               <div style={{ width: 1, height: 22, background: 'rgba(0,0,0,0.1)', flexShrink: 0 }} />
@@ -2168,7 +2441,15 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
                   }}
                 >
                   <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#374151' }}>
-                    총 {trophiesLoad === 'ok' ? trophyList.length : 0}개의 프로젝트
+                    총{' '}
+                    {trophiesLoad === 'ok' || (trophiesLoad === 'error' && trophyList.length > 0)
+                      ? trophyList.length
+                      : trophiesLoad === 'error'
+                        ? '—'
+                        : trophiesLoad === 'loading'
+                          ? '…'
+                          : 0}
+                    개의 프로젝트
                   </span>
                   <label style={{ fontSize: '0.74rem', color: '#6b7280', display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span>정렬</span>
