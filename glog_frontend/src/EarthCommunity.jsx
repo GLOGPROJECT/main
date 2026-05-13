@@ -732,6 +732,20 @@ export default function EarthCommunity() {
       },
     };
   }, [theme]);
+
+  // 밤 테마일 때 배경에 뿌릴 별 150개 — 랜덤 위치/크기/반짝임 타이밍 (한 번만 생성)
+  const nightStars = useMemo(() =>
+    Array.from({ length: 150 }, (_, i) => ({
+      id: i,
+      top: Math.random() * 100,
+      left: Math.random() * 100,
+      size: Math.random() * 1.5 + 0.5,
+      opacity: Math.random() * 0.5 + 0.3,
+      duration: Math.random() * 3 + 2,
+      delay: Math.random() * 4,
+    }))
+  , []);
+
   // 소켓/DmPanel에서 내 userId 식별용 — GlobalTopNav가 없는 globe 페이지에서 직접 세팅
   if (me) window.__myUserId = me.user_id;
 
@@ -1376,6 +1390,28 @@ export default function EarthCommunity() {
         ["--globe-notif-ring"]: globeChrome.notifRing,
       }}
     >
+      {/* 별 반짝임 애니메이션 정의 — dark 테마 별에서 사용 */}
+      <style>{`@keyframes twinkle { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }`}</style>
+
+      {/* 밤 테마일 때만 별 배경 레이어 표시 — 포인터 이벤트 없음(캔버스 클릭 방해 방지) */}
+      {theme === 'dark' && nightStars.map(star => (
+        <div
+          key={star.id}
+          style={{
+            position: 'absolute',
+            top: `${star.top}%`,
+            left: `${star.left}%`,
+            width: `${star.size}px`,
+            height: `${star.size}px`,
+            background: 'white',
+            borderRadius: '50%',
+            opacity: star.opacity,
+            animation: `twinkle ${star.duration}s ease-in-out ${star.delay}s infinite`,
+            pointerEvents: 'none',
+            zIndex: 0,
+          }}
+        />
+      ))}
       <div style={canvasHostStyle} onClick={handleCanvasClick}>
         <div
           style={canvasWrapStyle}

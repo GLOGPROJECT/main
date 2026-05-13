@@ -107,7 +107,7 @@ export default function Landing() {
       <div style={{
         position: 'relative',
         width: '100%',
-        minHeight: '100vh',
+        height: '100vh',
         background: '#0f1c36',
         overflow: 'hidden',
         color: 'white',
@@ -119,6 +119,7 @@ export default function Landing() {
         {/* ── 별 배경 레이어 ──
             stars 배열을 순회하며 작은 흰색 원을 절대 위치에 랜덤 배치
             twinkle 애니메이션으로 각각 다른 타이밍에 반짝임 */}
+        {/* Landing 배경은 항상 어두운 우주색이므로 별은 항상 표시 */}
         {stars.map(star => (
           <div
             key={star.id}
