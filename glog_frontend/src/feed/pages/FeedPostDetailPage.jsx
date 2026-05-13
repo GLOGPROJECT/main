@@ -124,7 +124,7 @@ export default function FeedPostDetailPage() {
       <PostCard post={post} variant="static" />
 
       <div style={{ marginTop: '1.25rem' }}>
-        <CommentSection postId={String(postId)} onCommentCountChange={bumpCommentCount} />
+        <CommentSection postId={String(postId)} anonymousThread={anonymous} onCommentCountChange={bumpCommentCount} />
       </div>
 
       {deleteOpen ? (

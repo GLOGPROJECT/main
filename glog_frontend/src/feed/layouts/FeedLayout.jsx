@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Outlet, useNavigate, useSearchParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/hooks/useAuth';
 import api from '../../api/axios';
+import { getAppSocket } from '../../realtime/appSocket';
 import { useFeedTheme } from '../theme/ThemeContext';
 import ComposeModal from '../components/ComposeModal';
 import PopularHashtagsSidebar from '../components/PopularHashtagsSidebar';
@@ -9,6 +11,8 @@ import FeedSidebarSearch from '../components/FeedSidebarSearch';
 import GuestModal from '../components/GuestModal';
 import FeedNavEffects from './FeedNavEffects';
 import GlobalTopNav from '../../components/GlobalTopNav';
+import DmPanel from '../../dm/DmPanel';
+import { useDmSocket } from '../../dm/useDmSocket';
 import { LoginModalProvider, useLoginModal } from '../auth/LoginModalContext';
 import { getTagPillColors, getTagPillLabelCapitalized } from '../utils/tagPillColors';
 import WeeklyActivityCard from '../components/WeeklyActivityCard';
@@ -29,6 +33,7 @@ function readSubscribedTagSlugsFromStorage() {
 function FeedLayoutInner() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const { theme, toggleTheme } = useFeedTheme();
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeEditPost, setComposeEditPost] = useState(null);
@@ -117,6 +122,75 @@ function FeedLayoutInner() {
     navigate('/feed', { replace: true });
   }, [logout, navigate]);
 
+  const [dmOpen, setDmOpen] = useState(false);
+  const [dmPartnerId, setDmPartnerId] = useState(null);
+  const dmReceiveHandlerRef = useRef(null);
+  const dmSentHandlerRef = useRef(null);
+  const dmReadAckHandlerRef = useRef(null);
+
+  const { sendMessage, markRead } = useDmSocket({
+    onReceive: (msg) => {
+      dmReceiveHandlerRef.current?.(msg);
+    },
+    onSent: (msg) => {
+      dmSentHandlerRef.current?.(msg);
+    },
+    onReadAck: (room_id) => {
+      dmReadAckHandlerRef.current?.(room_id);
+    },
+  });
+
+  if (user?.user_id) window.__myUserId = user.user_id;
+
+  useEffect(() => {
+    if (!user?.user_id) return undefined;
+    const socket = getAppSocket();
+    if (!socket) return undefined;
+
+    const invalidateFeed = () => {
+      void qc.invalidateQueries({ queryKey: ['feed'] });
+    };
+
+    const onPostNew = (payload) => {
+      if (!payload?.post_id) return;
+      invalidateFeed();
+    };
+    const onPostUpdated = (payload) => {
+      if (!payload?.post_id) return;
+      invalidateFeed();
+    };
+    const onPostDeleted = (payload) => {
+      if (!payload?.post_id) return;
+      invalidateFeed();
+    };
+    const onCommentNew = (payload) => {
+      const pid = payload?.post_id;
+      if (!pid) return;
+      invalidateFeed();
+      void qc.invalidateQueries({ queryKey: ['comments', String(pid)] });
+    };
+    const onCommentDeleted = (payload) => {
+      const pid = payload?.post_id;
+      if (!pid) return;
+      invalidateFeed();
+      void qc.invalidateQueries({ queryKey: ['comments', String(pid)] });
+    };
+
+    socket.on('feed_post:new', onPostNew);
+    socket.on('feed_post:updated', onPostUpdated);
+    socket.on('feed_post:deleted', onPostDeleted);
+    socket.on('feed_comment:new', onCommentNew);
+    socket.on('feed_comment:deleted', onCommentDeleted);
+
+    return () => {
+      socket.off('feed_post:new', onPostNew);
+      socket.off('feed_post:updated', onPostUpdated);
+      socket.off('feed_post:deleted', onPostDeleted);
+      socket.off('feed_comment:new', onCommentNew);
+      socket.off('feed_comment:deleted', onCommentDeleted);
+    };
+  }, [qc, user?.user_id]);
+
   const outletCtx = useMemo(() => ({ setComposeOpen: openComposeNew }), [openComposeNew]);
 
   return (
@@ -129,7 +203,31 @@ function FeedLayoutInner() {
           <div className="feed-card">
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.65rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', opacity: 0.7 }}>
-                <span title="DM">✉️</span>
+                {isLoggedIn ? (
+                  <button
+                    type="button"
+                    title="메시지"
+                    onClick={() => {
+                      setDmPartnerId(null);
+                      setDmOpen(true);
+                    }}
+                    style={{
+                      border: 'none',
+                      background: 'none',
+                      cursor: 'pointer',
+                      padding: 0,
+                      fontSize: '1rem',
+                      lineHeight: 1,
+                      opacity: 0.85,
+                    }}
+                  >
+                    <span aria-hidden>✉️</span>
+                  </button>
+                ) : (
+                  <span title="DM" aria-hidden>
+                    ✉️
+                  </span>
+                )}
                 <span title="알림">🔔</span>
               </div>
               {isLoggedIn ? (
@@ -299,6 +397,27 @@ function FeedLayoutInner() {
         browseEnabled={browseEnabled || isLoggedIn}
         isLoggedIn={isLoggedIn}
       />
+      {isLoggedIn && (
+        <DmPanel
+          isOpen={dmOpen}
+          onClose={() => {
+            setDmOpen(false);
+            setDmPartnerId(null);
+          }}
+          initialPartnerId={dmPartnerId}
+          sendMessage={sendMessage}
+          markRead={markRead}
+          registerReceive={(fn) => {
+            dmReceiveHandlerRef.current = fn;
+          }}
+          registerSent={(fn) => {
+            dmSentHandlerRef.current = fn;
+          }}
+          registerReadAck={(fn) => {
+            dmReadAckHandlerRef.current = fn;
+          }}
+        />
+      )}
     </div>
   );
 }

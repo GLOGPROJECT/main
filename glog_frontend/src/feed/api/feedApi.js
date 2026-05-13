@@ -113,8 +113,7 @@ export async function fetchFeedFromApi({
   if (feedType === 'anonymous' && anonymousSearch && String(anonymousSearch).trim()) {
     params.q = String(anonymousSearch).trim().slice(0, 100);
   }
-  if (feedType === 'anonymous' && sortOrder === 'popular') params.sort = 'popular';
-  if (feedType === 'tag' && sortOrder === 'popular') params.sort = 'popular';
+  if (sortOrder === 'popular') params.sort = 'popular';
 
   const { data } = await api.get(path, { params });
   const raw = data?.posts || [];

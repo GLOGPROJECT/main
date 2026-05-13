@@ -4,6 +4,7 @@ import { useInView } from 'react-intersection-observer';
 import api from '../../api/axios';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { useLoginModal } from '../auth/LoginModalContext';
+import { ANON_AVATAR_SRCS, getStableAnonIndexForComment } from '../utils/anonAvatar';
 
 const MAX_COMMENT_LEN = 1000;
 const PAGE = 20;
@@ -16,25 +17,36 @@ function formatCommentTime(iso) {
 }
 
 function mapApiToUi(c) {
+  const anonIdx = typeof c.anonymous_avatar_index === 'number' ? c.anonymous_avatar_index : null;
+  const isAnonDisplay = anonIdx != null && anonIdx >= 0 && anonIdx < 10;
   const u = c.user;
+  const nickname = isAnonDisplay ? '익명' : u?.nickname || '알 수 없음';
+  const avatarUrl = isAnonDisplay ? ANON_AVATAR_SRCS[anonIdx] : u?.avatar_url || undefined;
   return {
     id: String(c.id),
-    author: u?.nickname || '알 수 없음',
-    avatarUrl: u?.avatar_url || undefined,
+    author: nickname,
+    avatarUrl,
     body: c.content,
     is_deleted: Boolean(c.is_deleted),
     createdAt: formatCommentTime(c.created_at),
+    is_mine: Boolean(c.is_mine),
+    isAnonDisplay,
   };
 }
 
-export default function CommentSection({ postId, onCommentCountChange, intersectionRoot = null }) {
+export default function CommentSection({
+  postId,
+  onCommentCountChange,
+  intersectionRoot = null,
+  /** 익명 게시글 스레드: 댓글·작성 UI를 익명 프로필로 표시 */
+  anonymousThread = false,
+}) {
   const { user } = useAuth();
   const { requestLogin } = useLoginModal();
   const qc = useQueryClient();
   const [draft, setDraft] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
-  const currentHandle = user?.nickname || user?.username || user?.handle || user?.name || '';
 
   const pid = String(postId);
   const queryKey = useMemo(() => ['comments', pid], [pid]);
@@ -88,7 +100,7 @@ export default function CommentSection({ postId, onCommentCountChange, intersect
 
   const softDelete = useCallback(
     async (comment) => {
-      if (comment.is_deleted || !currentHandle || comment.author !== currentHandle) return;
+      if (comment.is_deleted || !comment.is_mine) return;
       try {
         await api.delete(`/comments/${comment.id}`);
         persistAndRefresh();
@@ -97,7 +109,7 @@ export default function CommentSection({ postId, onCommentCountChange, intersect
         /* ignore */
       }
     },
-    [currentHandle, persistAndRefresh, onCommentCountChange]
+    [persistAndRefresh, onCommentCountChange]
   );
 
   const onKeyDown = (e) => {
@@ -116,7 +128,17 @@ export default function CommentSection({ postId, onCommentCountChange, intersect
       <div className="feed-comment-compose-sticky">
         <div className="feed-card feed-comment-compose-card">
           <div className="feed-comment-compose-row">
-            {user?.avatar_url ? (
+            {anonymousThread && user?.user_id != null ? (
+              <div className="feed-avatar feed-avatar-sm feed-avatar-anon-img" aria-hidden>
+                <img
+                  src={ANON_AVATAR_SRCS[getStableAnonIndexForComment(user.user_id, pid)]}
+                  alt=""
+                  width={36}
+                  height={36}
+                  decoding="async"
+                />
+              </div>
+            ) : user?.avatar_url ? (
               <div className="feed-avatar feed-avatar-sm feed-avatar-img" aria-hidden>
                 <img src={user.avatar_url} alt="" width={36} height={36} decoding="async" />
               </div>
@@ -127,7 +149,11 @@ export default function CommentSection({ postId, onCommentCountChange, intersect
               <textarea
                 className="feed-comment-textarea feed-comment-textarea-inline"
                 rows={1}
-                placeholder="댓글을 입력하세요 (Shift+Enter 줄바꿈)"
+                placeholder={
+                  anonymousThread
+                    ? '익명으로 댓글을 입력하세요 (Shift+Enter 줄바꿈)'
+                    : '댓글을 입력하세요 (Shift+Enter 줄바꿈)'
+                }
                 maxLength={MAX_COMMENT_LEN}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
@@ -164,7 +190,11 @@ export default function CommentSection({ postId, onCommentCountChange, intersect
               ) : (
                 <>
                   <div className="feed-comment-row-head">
-                    {c.avatarUrl ? (
+                    {c.isAnonDisplay ? (
+                      <div className="feed-avatar feed-avatar-sm feed-avatar-anon-img" aria-hidden>
+                        <img src={c.avatarUrl} alt="" width={36} height={36} decoding="async" />
+                      </div>
+                    ) : c.avatarUrl ? (
                       <div className="feed-avatar feed-avatar-sm feed-avatar-img" aria-hidden>
                         <img src={c.avatarUrl} alt="" width={36} height={36} decoding="async" />
                       </div>
@@ -179,7 +209,7 @@ export default function CommentSection({ postId, onCommentCountChange, intersect
                         </span>
                       ) : null}
                     </div>
-                    {currentHandle && c.author === currentHandle ? (
+                    {c.is_mine ? (
                       <button type="button" className="feed-btn-outline" style={{ padding: '0.2rem 0.45rem', fontSize: '0.72rem' }} onClick={() => softDelete(c)}>
                         삭제
                       </button>

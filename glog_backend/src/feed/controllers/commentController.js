@@ -25,7 +25,9 @@ async function deleteComment(req, res, next) {
     if (Number.isNaN(cid)) {
       return res.status(400).json({ error: '잘못된 댓글 ID입니다.', code: 'VALIDATION_ERROR' });
     }
-    await commentService.softDeleteComment(req.user.userId, cid);
+    const postId = await commentService.softDeleteComment(req.user.userId, cid);
+    const io = req.app.get('io');
+    if (io && postId != null) io.emit('feed_comment:deleted', { post_id: postId, comment_id: cid });
     return res.status(200).json({ message: '삭제되었습니다' });
   } catch (err) {
     if (handleWriteError(err, res)) return;

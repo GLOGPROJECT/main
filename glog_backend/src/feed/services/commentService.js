@@ -29,6 +29,16 @@ async function getBlockedUserIds(viewerId) {
   return [...ids];
 }
 
+/** 같은 글·같은 작성자면 항상 동일한 익명 아바타(0~9) */
+function stableAnonCommentAvatarIndex(userId, postId) {
+  const s = `${Number(userId)}:${Number(postId)}`;
+  let hash = 0;
+  for (let i = 0; i < s.length; i += 1) {
+    hash = (Math.imul(31, hash) + s.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash) % 10;
+}
+
 async function assertPostReadableForComments(postId, viewerId) {
   const post = await prisma.post.findFirst({
     where: { post_id: postId },
@@ -48,7 +58,7 @@ async function assertPostReadableForComments(postId, viewerId) {
   return post;
 }
 
-function mapCommentRow(row) {
+function mapCommentRow(row, viewerId, postType, postIdNum) {
   if (!row) return null;
   if (row.is_deleted) {
     return {
@@ -57,8 +67,25 @@ function mapCommentRow(row) {
       is_deleted: true,
       created_at: row.created_at,
       user: null,
+      is_mine: false,
     };
   }
+  const authorId = row.user_id;
+  const mine = viewerId != null && authorId != null && Number(authorId) === Number(viewerId);
+
+  if (postType === 'anonymous' && authorId != null) {
+    const idx = stableAnonCommentAvatarIndex(authorId, postIdNum);
+    return {
+      id: row.id,
+      content: row.content,
+      is_deleted: false,
+      created_at: row.created_at,
+      user: { user_id: 0, nickname: '익명', avatar_url: null },
+      is_mine: mine,
+      anonymous_avatar_index: idx,
+    };
+  }
+
   const u = row.user;
   return {
     id: row.id,
@@ -68,11 +95,14 @@ function mapCommentRow(row) {
     user: u
       ? { user_id: u.user_id, nickname: u.nickname, avatar_url: u.avatar_url || null }
       : { user_id: 0, nickname: '알 수 없음', avatar_url: null },
+    is_mine: mine,
   };
 }
 
 async function listCommentsForPost(postId, viewerId, { last_comment_id, limit: limitRaw }) {
-  await assertPostReadableForComments(postId, viewerId);
+  const post = await assertPostReadableForComments(postId, viewerId);
+  const postType = post.type;
+  const postIdNum = Number(post.post_id);
 
   let limit = parseInt(limitRaw, 10);
   if (Number.isNaN(limit) || limit < 1) limit = DEFAULT_LIMIT;
@@ -101,7 +131,7 @@ async function listCommentsForPost(postId, viewerId, { last_comment_id, limit: l
   const nextCursor = hasMore && slice.length ? slice[slice.length - 1].id : null;
 
   return {
-    comments: slice.map(mapCommentRow),
+    comments: slice.map((r) => mapCommentRow(r, viewerId, postType, postIdNum)),
     nextCursor,
   };
 }
@@ -115,6 +145,7 @@ async function createComment(authorId, postId, content) {
     throw err('VALIDATION_ERROR', '댓글은 1000자 이하여야 합니다.');
   }
 
+  let postType = 'public';
   const newId = await prisma.$transaction(async (tx) => {
     const post = await tx.post.findFirst({
       where: { post_id: postId, is_deleted: false },
@@ -126,6 +157,7 @@ async function createComment(authorId, postId, content) {
     if (post.type === 'secret' && post.user_id !== authorId) {
       throw err('POST_NOT_FOUND', '게시글을 찾을 수 없습니다.', 404);
     }
+    postType = post.type;
 
     // DB에 comments.id AUTO_INCREMENT가 없을 때 Prisma 기본 create가 실패할 수 있음 → MAX+1 (post_images 등과 동일)
     const idRows = await tx.$queryRaw`SELECT COALESCE(MAX(id), 0) AS m FROM comments FOR UPDATE`;
@@ -145,7 +177,7 @@ async function createComment(authorId, postId, content) {
 
     await tx.post.update({
       where: { post_id: postId },
-      data: { comment_count: { increment: 1 } },
+      data: { comment_count: { increment: 1 }, engagement_score: { increment: 1 } },
     });
 
     return created.id;
@@ -155,11 +187,11 @@ async function createComment(authorId, postId, content) {
     where: { id: newId },
     include: { user: { select: { user_id: true, nickname: true, avatar_url: true } } },
   });
-  return mapCommentRow(row);
+  return mapCommentRow(row, authorId, postType, Number(postId));
 }
 
 async function softDeleteComment(requesterId, commentId) {
-  await prisma.$transaction(async (tx) => {
+  const postId = await prisma.$transaction(async (tx) => {
     const c = await tx.comment.findFirst({
       where: { id: commentId },
       select: { id: true, post_id: true, user_id: true, is_deleted: true },
@@ -171,7 +203,7 @@ async function softDeleteComment(requesterId, commentId) {
       throw err('FORBIDDEN', '본인의 댓글만 삭제할 수 있습니다.', 403);
     }
     if (c.is_deleted) {
-      return;
+      return c.post_id;
     }
 
     await tx.comment.update({
@@ -181,14 +213,17 @@ async function softDeleteComment(requesterId, commentId) {
 
     const post = await tx.post.findUnique({
       where: { post_id: c.post_id },
-      select: { comment_count: true },
+      select: { comment_count: true, like_count: true },
     });
     const next = Math.max(0, (post?.comment_count ?? 1) - 1);
+    const likes = Number(post?.like_count ?? 0);
     await tx.post.update({
       where: { post_id: c.post_id },
-      data: { comment_count: next },
+      data: { comment_count: next, engagement_score: likes + next },
     });
+    return c.post_id;
   });
+  return postId;
 }
 
 module.exports = {

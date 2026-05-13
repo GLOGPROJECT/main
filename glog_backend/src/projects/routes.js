@@ -9,6 +9,9 @@ const optionalAuthenticate = require('../auth/optionalAuthMiddleware');
 const {
   listUserProjectsWithTrophies,
   listCommunityProjectsWithTrophies,
+  listProjectComments,
+  createProjectComment,
+  deleteProjectComment,
   createProject,
   updateProject,
   deleteProject,
@@ -122,6 +125,8 @@ router.post('/', authenticate, async (req, res) => {
       const status = r.code === 'limit' ? 429 : r.code === 'duplicate' ? 409 : 400;
       return res.status(status).json({ message: r.message });
     }
+    const io = req.app.get('io');
+    if (io) io.emit('project:changed', { project_id: r.project_id, action: 'created' });
     return res.status(201).json({ project_id: r.project_id, trophy_id: r.trophy_id });
   } catch (err) {
     console.error('[ProjectCreate Error]', err.message);
@@ -141,9 +146,75 @@ router.post('/trophies/:trophyId/like', authenticate, async (req, res) => {
       const status = r.code === 'not_found' ? 404 : r.code === 'self' ? 400 : 400;
       return res.status(status).json({ message: r.message });
     }
+    const io = req.app.get('io');
+    if (io) io.emit('trophy:like_changed', { trophy_id: trophyId });
     return res.json({ liked: r.liked, like_count: r.like_count });
   } catch (err) {
     console.error('[TrophyLike Error]', err.message);
+    return res.status(500).json({ message: '서버 오류가 발생했습니다.' });
+  }
+});
+
+// GET /api/projects/:projectId/comments — 프로젝트 댓글 목록
+router.get('/:projectId/comments', async (req, res) => {
+  const projectId = parseInt(req.params.projectId, 10);
+  if (!Number.isFinite(projectId) || projectId <= 0) {
+    return res.status(400).json({ message: '유효하지 않은 프로젝트 ID입니다.' });
+  }
+  try {
+    const r = await listProjectComments(projectId);
+    if (!r.ok) {
+      const status = r.code === 'not_found' ? 404 : 400;
+      return res.status(status).json({ message: r.message });
+    }
+    return res.json({ comments: r.comments });
+  } catch (err) {
+    console.error('[ProjectCommentsList Error]', err.message);
+    return res.status(500).json({ message: '서버 오류가 발생했습니다.' });
+  }
+});
+
+// POST /api/projects/:projectId/comments — 프로젝트 댓글 작성 (실시간은 Socket emit)
+router.post('/:projectId/comments', authenticate, async (req, res) => {
+  const projectId = parseInt(req.params.projectId, 10);
+  if (!Number.isFinite(projectId) || projectId <= 0) {
+    return res.status(400).json({ message: '유효하지 않은 프로젝트 ID입니다.' });
+  }
+  try {
+    const r = await createProjectComment(req.user.userId, projectId, req.body?.content);
+    if (!r.ok) {
+      const status =
+        r.code === 'not_found' ? 404 : r.code === 'validation' ? 400 : 400;
+      return res.status(status).json({ message: r.message });
+    }
+    const io = req.app.get('io');
+    if (io) io.to(`project:${projectId}`).emit('project_comment:new', r.comment);
+    return res.status(201).json(r.comment);
+  } catch (err) {
+    console.error('[ProjectCommentCreate Error]', err.message);
+    return res.status(500).json({ message: '서버 오류가 발생했습니다.' });
+  }
+});
+
+// DELETE /api/projects/:projectId/comments/:commentId — 본인 댓글 삭제
+router.delete('/:projectId/comments/:commentId', authenticate, async (req, res) => {
+  const projectId = parseInt(req.params.projectId, 10);
+  const commentId = parseInt(req.params.commentId, 10);
+  if (!Number.isFinite(projectId) || projectId <= 0 || !Number.isFinite(commentId) || commentId <= 0) {
+    return res.status(400).json({ message: '유효하지 않은 ID입니다.' });
+  }
+  try {
+    const r = await deleteProjectComment(req.user.userId, projectId, commentId);
+    if (!r.ok) {
+      const status =
+        r.code === 'not_found' ? 404 : r.code === 'forbidden' ? 403 : r.code === 'validation' ? 400 : 400;
+      return res.status(status).json({ message: r.message });
+    }
+    const io = req.app.get('io');
+    if (io) io.to(`project:${projectId}`).emit('project_comment:deleted', { project_id: projectId, id: commentId });
+    return res.status(204).send();
+  } catch (err) {
+    console.error('[ProjectCommentDelete Error]', err.message);
     return res.status(500).json({ message: '서버 오류가 발생했습니다.' });
   }
 });
@@ -161,6 +232,8 @@ router.patch('/:projectId', authenticate, async (req, res) => {
         r.code === 'not_found' ? 404 : r.code === 'duplicate' ? 409 : r.code === 'validation' ? 400 : 400;
       return res.status(status).json({ message: r.message });
     }
+    const io = req.app.get('io');
+    if (io) io.emit('project:changed', { project_id: projectId, action: 'updated' });
     return res.json({ ok: true });
   } catch (err) {
     console.error('[ProjectUpdate Error]', err.message);
@@ -180,6 +253,8 @@ router.delete('/:projectId', authenticate, async (req, res) => {
       const status = r.code === 'not_found' ? 404 : 400;
       return res.status(status).json({ message: r.message });
     }
+    const io = req.app.get('io');
+    if (io) io.emit('project:changed', { project_id: projectId, action: 'deleted' });
     return res.status(204).send();
   } catch (err) {
     console.error('[ProjectDelete Error]', err.message);

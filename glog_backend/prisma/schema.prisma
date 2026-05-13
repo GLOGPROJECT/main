@@ -126,6 +126,7 @@ model User {
   trophy_likes          TrophyLike[]
   project_contributions ProjectContributor[] @relation("ProjectContributorUser")
   contribution_days     ContributionDay[]
+  project_comments      ProjectComment[]      @relation("ProjectCommentAuthor")
 
   @@map("users")
 }
@@ -305,6 +306,8 @@ model Post {
   is_edited     Boolean  @default(false)
   like_count    Int      @default(0)
   comment_count Int      @default(0)
+  /// 인기 피드 정렬용: like_count + comment_count (좋아요/댓글 변경 시 동기화)
+  engagement_score Int @default(0)
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt
   deleted_at    DateTime?
@@ -442,6 +445,7 @@ model Project {
   project_tags ProjectTag[]
   trophy       Trophy?
   contributors ProjectContributor[]
+  comments     ProjectComment[]
 
   @@map("projects")
 }
@@ -466,6 +470,21 @@ model ProjectTag {
   project Project @relation(fields: [project_id], references: [projects_id])
 
   @@map("project_tags")
+}
+
+model ProjectComment {
+  id         Int      @id @default(autoincrement())
+  project_id Int
+  user_id    Int
+  content    String   @db.VarChar(2000)
+  is_deleted Boolean  @default(false)
+  created_at DateTime @default(now())
+
+  project Project @relation(fields: [project_id], references: [projects_id], onDelete: Cascade)
+  user    User    @relation("ProjectCommentAuthor", fields: [user_id], references: [user_id], onDelete: Cascade)
+
+  @@index([project_id, created_at])
+  @@map("project_comments")
 }
 
 model Trophy {
