@@ -8,6 +8,7 @@ const authenticate = require('../auth/middleware');
 const optionalAuthenticate = require('../auth/optionalAuthMiddleware');
 const {
   listUserProjectsWithTrophies,
+  listCommunityProjectsWithTrophies,
   createProject,
   updateProject,
   deleteProject,
@@ -54,6 +55,21 @@ router.get('/me/today-count', authenticate, async (req, res) => {
     return res.json({ count, max, remaining: Math.max(0, max - count) });
   } catch (err) {
     console.error('[ProjectTodayCount Error]', err.message);
+    return res.status(500).json({ message: '서버 오류가 발생했습니다.' });
+  }
+});
+
+// GET /api/projects/community — 모든 유저 프로젝트·트로피 (트로피 탭 공용)
+router.get('/community', optionalAuthenticate, async (req, res) => {
+  try {
+    const viewerId = req.user?.userId ?? null;
+    const sortRaw = String(req.query.sort || '').toLowerCase();
+    const sortMode =
+      sortRaw === 'popular' ? 'popular' : sortRaw === 'oldest' ? 'oldest' : 'latest';
+    const items = await listCommunityProjectsWithTrophies(viewerId, sortMode);
+    return res.json({ items });
+  } catch (err) {
+    console.error('[ProjectsCommunity Error]', err.message);
     return res.status(500).json({ message: '서버 오류가 발생했습니다.' });
   }
 });

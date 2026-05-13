@@ -85,9 +85,13 @@ function parseProjectImagePaths(raw) {
 function mapRow(row) {
   const imagePaths = parseProjectImagePaths(row.image_url);
   const galleryImages = imagePaths.map((p) => resolveMediaUrl(p)).filter(Boolean);
+  const ownerUserId = row.owner_user_id != null ? Number(row.owner_user_id) : null;
   return {
     id: row.project_id,
     trophyId: row.trophy_id,
+    ownerUserId: Number.isFinite(ownerUserId) && ownerUserId > 0 ? ownerUserId : null,
+    authorNickname: String(row.author_nickname || '').trim(),
+    authorAvatarUrl: row.author_avatar_url || null,
     title: row.title,
     desc: String(row.description || '').trim(),
     image: galleryImages[0] || null,
@@ -132,12 +136,12 @@ export default function TrophyModal({ open, onClose }) {
   const [trophyLikeBusy, setTrophyLikeBusy] = useState(false);
   const uid = user?.user_id;
 
-  const fetchList = useCallback(async () => {
-    if (!uid) return;
-    setLoad('loading');
+  const fetchList = useCallback(async (opts) => {
+    const silent = Boolean(opts?.silent);
+    if (!silent) setLoad('loading');
     try {
       const sortParam = sort === 'oldest' ? 'oldest' : 'latest';
-      const { data } = await api.get(`/projects/user/${uid}`, { params: { sort: sortParam } });
+      const { data } = await api.get('/projects/community', { params: { sort: sortParam } });
       const rows = Array.isArray(data?.items) ? data.items : [];
       setItems(rows.map(mapRow));
       setLikedSet(
@@ -145,10 +149,12 @@ export default function TrophyModal({ open, onClose }) {
       );
       setLoad('ok');
     } catch {
-      setItems([]);
-      setLoad('error');
+      if (!silent) {
+        setItems([]);
+        setLoad('error');
+      }
     }
-  }, [uid, sort]);
+  }, [sort]);
 
   useEffect(() => {
     if (!open) return;
@@ -158,6 +164,8 @@ export default function TrophyModal({ open, onClose }) {
       return;
     }
     fetchList();
+    const t = setInterval(() => fetchList({ silent: true }), 12000);
+    return () => clearInterval(t);
   }, [open, uid, fetchList]);
 
   useEffect(() => {
@@ -300,7 +308,8 @@ export default function TrophyModal({ open, onClose }) {
   }, [view, selected?.id, selected?.image_url_raw, gallerySlides.length]);
 
   const handleShare = async () => {
-    const url = uid ? `${window.location.origin}/profile/${uid}` : window.location.href;
+    const profileId = selected?.ownerUserId ?? uid;
+    const url = profileId ? `${window.location.origin}/profile/${profileId}` : window.location.href;
     try {
       await navigator.clipboard.writeText(url);
       window.alert('프로필 링크가 클립보드에 복사되었습니다.');
@@ -317,6 +326,11 @@ export default function TrophyModal({ open, onClose }) {
   if (!open) return null;
 
   const isDetail = view === 'detail' && selected;
+
+  const authorAvatarSrc = selected?.authorAvatarUrl ? resolveMediaUrl(selected.authorAvatarUrl) : '';
+  const authorName = String(selected?.authorNickname || '').trim() || '—';
+  const isOwnProject =
+    selected?.ownerUserId != null && uid != null && Number(selected.ownerUserId) === Number(uid);
 
   const backdrop = {
     position: 'fixed',
@@ -423,40 +437,44 @@ export default function TrophyModal({ open, onClose }) {
               ← 트로피 목록으로
             </button>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                onClick={openEdit}
-                style={{
-                  padding: '6px 12px',
-                  borderRadius: 8,
-                  border: `1px solid ${border}`,
-                  background: '#f1f5f9',
-                  cursor: 'pointer',
-                  fontSize: '0.82rem',
-                  fontWeight: 600,
-                }}
-              >
-                수정
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setDeleteError(null);
-                  setDeleteConfirmOpen(true);
-                }}
-                style={{
-                  padding: '6px 12px',
-                  borderRadius: 8,
-                  border: '1px solid #fecaca',
-                  background: '#fef2f2',
-                  color: '#b91c1c',
-                  cursor: 'pointer',
-                  fontSize: '0.82rem',
-                  fontWeight: 600,
-                }}
-              >
-                삭제
-              </button>
+              {uid && selected?.ownerUserId != null && Number(selected.ownerUserId) === Number(uid) ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={openEdit}
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: 8,
+                      border: `1px solid ${border}`,
+                      background: '#f1f5f9',
+                      cursor: 'pointer',
+                      fontSize: '0.82rem',
+                      fontWeight: 600,
+                    }}
+                  >
+                    수정
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDeleteError(null);
+                      setDeleteConfirmOpen(true);
+                    }}
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #fecaca',
+                      background: '#fef2f2',
+                      color: '#b91c1c',
+                      cursor: 'pointer',
+                      fontSize: '0.82rem',
+                      fontWeight: 600,
+                    }}
+                  >
+                    삭제
+                  </button>
+                </>
+              ) : null}
               <button
                 type="button"
                 onClick={onClose}
@@ -1084,8 +1102,8 @@ export default function TrophyModal({ open, onClose }) {
                       border: `1px solid ${border}`,
                     }}
                   >
-                    {user?.avatar_url ? (
-                      <img src={user.avatar_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    {authorAvatarSrc ? (
+                      <img src={authorAvatarSrc} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     ) : (
                       <div
                         style={{
@@ -1106,7 +1124,7 @@ export default function TrophyModal({ open, onClose }) {
                   <div style={{ minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <span style={{ fontWeight: 800, fontSize: '0.95rem', color: 'var(--feed-text-primary)' }}>
-                        {user?.nickname || user?.github_id || '—'}
+                        {authorName}
                       </span>
                       {(() => {
                         const contribs = selected.contributors || [];
@@ -1163,7 +1181,7 @@ export default function TrophyModal({ open, onClose }) {
                         );
                       })()}
                     </div>
-                    {user?.bio ? (
+                    {isOwnProject && user?.bio ? (
                       <p
                         className="feed-post-meta"
                         style={{ margin: '4px 0 0', fontSize: '0.78rem', lineHeight: 1.45, whiteSpace: 'pre-wrap' }}
