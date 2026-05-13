@@ -56,6 +56,7 @@ async function listUserProjectsWithTrophies(userId, viewerId, sortMode = 'latest
     include: {
       project_tags: true,
       trophy: true,
+      user: { select: { user_id: true, nickname: true, avatar_url: true } },
       contributors: {
         include: {
           user: { select: { user_id: true, nickname: true, avatar_url: true } },
@@ -81,6 +82,9 @@ async function listUserProjectsWithTrophies(userId, viewerId, sortMode = 'latest
     .map((r) => ({
       project_id: r.projects_id,
       trophy_id: r.trophy.trophies_id,
+      owner_user_id: r.user_id,
+      author_nickname: r.user?.nickname ?? '',
+      author_avatar_url: r.user?.avatar_url ?? null,
       title: r.title,
       description: r.description,
       github_url: r.github_url,
@@ -103,6 +107,78 @@ async function listUserProjectsWithTrophies(userId, viewerId, sortMode = 'latest
         avatar_url: c.user?.avatar_url ?? null,
       })),
     }));
+}
+
+/**
+ * 전체 유저의 프로젝트·트로피 목록 (트로피 탭 공용 피드)
+ * @param {number|null} viewerId
+ * @param {'latest'|'oldest'|'popular'} [sortMode='latest']
+ */
+async function listCommunityProjectsWithTrophies(viewerId, sortMode = 'latest') {
+  let orderBy;
+  if (sortMode === 'popular') {
+    orderBy = [{ trophy: { like_count: 'desc' } }, { created_at: 'desc' }];
+  } else {
+    const dir = sortMode === 'oldest' ? 'asc' : 'desc';
+    orderBy = { created_at: dir };
+  }
+  const rows = await prisma.project.findMany({
+    where: { is_deleted: false, trophy: { isNot: null } },
+    orderBy,
+    include: {
+      project_tags: true,
+      trophy: true,
+      user: { select: { user_id: true, nickname: true, avatar_url: true } },
+      contributors: {
+        include: {
+          user: { select: { user_id: true, nickname: true, avatar_url: true } },
+        },
+      },
+    },
+  });
+
+  const withTrophy = rows.filter((r) => r.trophy);
+
+  let likedTrophyIds = new Set();
+  if (viewerId && withTrophy.length) {
+    const tids = withTrophy.map((r) => r.trophy.trophies_id).filter(Boolean);
+    if (tids.length) {
+      const likes = await prisma.trophyLike.findMany({
+        where: { user_id: viewerId, trophy_id: { in: tids } },
+        select: { trophy_id: true },
+      });
+      likedTrophyIds = new Set(likes.map((l) => l.trophy_id));
+    }
+  }
+
+  return withTrophy.map((r) => ({
+    project_id: r.projects_id,
+    trophy_id: r.trophy.trophies_id,
+    owner_user_id: r.user_id,
+    author_nickname: r.user?.nickname ?? '',
+    author_avatar_url: r.user?.avatar_url ?? null,
+    title: r.title,
+    description: r.description,
+    github_url: r.github_url,
+    deploy_url: r.deploy_url,
+    image_url: r.image_url,
+    video_url: r.video_url,
+    techStacks: r.project_tags.map((t) => t.tag_name),
+    dateRange: formatDateRange(r.start_date, r.end_date),
+    start_date: r.start_date,
+    end_date: r.end_date,
+    timeAgo: timeAgoFromDate(new Date(r.created_at)),
+    updated_at: r.updated_at,
+    grade: r.trophy.grade,
+    likes: r.trophy.like_count,
+    liked_by_me: likedTrophyIds.has(r.trophy.trophies_id),
+    comments: 0,
+    contributors: (r.contributors || []).map((c) => ({
+      user_id: c.user_id,
+      nickname: c.user?.nickname ?? '',
+      avatar_url: c.user?.avatar_url ?? null,
+    })),
+  }));
 }
 
 function startOfUtcDay(d = new Date()) {
@@ -430,6 +506,7 @@ async function countTodayProjectsForUser(userId) {
 
 module.exports = {
   listUserProjectsWithTrophies,
+  listCommunityProjectsWithTrophies,
   createProject,
   updateProject,
   deleteProject,

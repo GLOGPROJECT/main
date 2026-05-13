@@ -412,6 +412,9 @@ function mapProjectsApiToTrophyList(data) {
   return items.map((row) => ({
     id: row.project_id,
     trophyId: row.trophy_id,
+    ownerUserId: row.owner_user_id != null ? Number(row.owner_user_id) : null,
+    authorNickname: String(row.author_nickname || '').trim(),
+    authorAvatarUrl: row.author_avatar_url ?? null,
     title: row.title,
     desc: String(row.description || '').trim(),
     image: resolveProjectThumb(row.image_url),
@@ -2123,10 +2126,13 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
                           ...trophy,
                           liked: likedSet.has(`t_${trophy.trophyId}`),
                           ownerProfile: {
-                            nickname: d.name,
-                            avatar_url: d.avatar_url,
-                            bio: d.bio,
-                            isOwnerMe: d.isMe,
+                            nickname: trophy.authorNickname || '—',
+                            avatar_url: trophy.authorAvatarUrl,
+                            bio: '',
+                            isOwnerMe:
+                              viewer?.user_id != null &&
+                              trophy.ownerUserId != null &&
+                              Number(viewer.user_id) === Number(trophy.ownerUserId),
                           },
                         })
                       }
@@ -2137,10 +2143,13 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
                           ...trophy,
                           liked: likedSet.has(`t_${trophy.trophyId}`),
                           ownerProfile: {
-                            nickname: d.name,
-                            avatar_url: d.avatar_url,
-                            bio: d.bio,
-                            isOwnerMe: d.isMe,
+                            nickname: trophy.authorNickname || '—',
+                            avatar_url: trophy.authorAvatarUrl,
+                            bio: '',
+                            isOwnerMe:
+                              viewer?.user_id != null &&
+                              trophy.ownerUserId != null &&
+                              Number(viewer.user_id) === Number(trophy.ownerUserId),
                           },
                         });
                       }}
