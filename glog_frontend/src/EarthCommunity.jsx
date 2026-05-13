@@ -817,11 +817,6 @@ export default function EarthCommunity() {
     // API 결과에 내가 없으면 직접 추가 (id는 숫자/문자열 모두 대응)
     const hasMe = normalized.some((u) => Number(u.id) === Number(me.user_id));
     if (hasMe) return normalized;
-    const hasMe = apiGlobeUsers.some((u) => Number(u.id) === Number(me.user_id));
-    // 내가 이미 있어도 isMe: true가 없으므로 내 항목에 플래그 추가
-    if (hasMe) return apiGlobeUsers.map((u) =>
-      Number(u.id) === Number(me.user_id) ? { ...u, isMe: true } : u
-    );
     const lat = parseGlobeCoord(me.globe_lat, 37.56);
     const lon = parseGlobeCoord(me.globe_lon, 126.97);
     // globe_lat/lon이 없으면 지구본에 표시하지 않음
