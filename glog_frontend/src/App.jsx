@@ -14,6 +14,9 @@ import FeedTagHubPage from './feed/pages/FeedTagHubPage';
 import FeedTagRedirect from './feed/pages/FeedTagRedirect';
 import FeedPostDetailPage from './feed/pages/FeedPostDetailPage';
 import FeedAnonymousPage from './feed/pages/FeedAnonymousPage';
+import FeedSearchRedirect from './feed/pages/FeedSearchRedirect';
+import FeedUserPage from './feed/pages/FeedUserPage';
+import { TrophyModalProvider } from './feed/trophy/TrophyModalContext';
 import { feedQueryClient } from './feed/queryClient';
 import EarthCommunity from './EarthCommunity';
 import ProfilePage from './profile/ProfilePage';
@@ -24,51 +27,55 @@ export default function App() {
       <ThemeProvider>
         <QueryClientProvider client={feedQueryClient}>
           <AuthProvider>
-            <Routes>
-              {/* 공개 라우트 */}
-              <Route path="/" element={<Landing />} />
-              <Route path="/auth/callback" element={<OAuthCallback />} />
+            <TrophyModalProvider>
+              <Routes>
+                {/* 공개 라우트 */}
+                <Route path="/" element={<Landing />} />
+                <Route path="/auth/callback" element={<OAuthCallback />} />
 
-              {/* 로그인만 필요 (초기설정 진행 중) */}
-              <Route
-                path="/initial-setup"
-                element={
-                  <AuthRoute>
-                    <InitialSetup />
-                  </AuthRoute>
-                }
-              />
+                {/* 로그인만 필요 (초기설정 진행 중) */}
+                <Route
+                  path="/initial-setup"
+                  element={
+                    <AuthRoute>
+                      <InitialSetup />
+                    </AuthRoute>
+                  }
+                />
 
-              {/* 피드 관련 라우트 */}
-              <Route path="/tag/:slug" element={<FeedLayout />}>
-                <Route index element={<FeedTagPage />} />
-              </Route>
+                {/* 피드 관련 라우트 */}
+                <Route path="/tag/:slug" element={<FeedLayout />}>
+                  <Route index element={<FeedTagPage />} />
+                </Route>
 
-              <Route path="/feed" element={<FeedLayout />}>
-                <Route index element={<FeedHomePage />} />
-                <Route path="follow" element={<FeedFollowPage />} />
-                <Route path="tag" element={<FeedTagHubPage />} />
-                <Route path="tag/:slug" element={<FeedTagRedirect />} />
-                <Route path="post/:postId" element={<FeedPostDetailPage />} />
-                <Route path="anonymous" element={<FeedAnonymousPage />} />
-              </Route>
+                <Route path="/feed" element={<FeedLayout />}>
+                  <Route index element={<FeedHomePage />} />
+                  <Route path="follow" element={<FeedFollowPage />} />
+                  <Route path="tag" element={<FeedTagHubPage />} />
+                  <Route path="tag/:slug" element={<FeedTagRedirect />} />
+                  <Route path="post/:postId" element={<FeedPostDetailPage />} />
+                  <Route path="user/:userId" element={<FeedUserPage />} />
+                  <Route path="anonymous" element={<FeedAnonymousPage />} />
+                  <Route path="search" element={<FeedSearchRedirect />} />
+                </Route>
 
-              {/* 지구본 메인 - 로그인 없이 테스트 가능 */}
-              <Route
-                path="/globe"
-                element={<EarthCommunity />}
-              />
+                {/* 지구본 메인 - 로그인 없이 테스트 가능 */}
+                <Route
+                  path="/globe"
+                  element={<EarthCommunity />}
+                />
 
-              {/* 유저 프로필 페이지 - /profile/:userId */}
-              <Route
-                path="/profile/:userId"
-                element={
-                  <ProtectedRoute>
-                    <ProfilePage />
-                  </ProtectedRoute>
-                }
-              />
-            </Routes>
+                {/* 유저 프로필 페이지 - /profile/:userId */}
+                <Route
+                  path="/profile/:userId"
+                  element={
+                    <ProtectedRoute>
+                      <ProfilePage />
+                    </ProtectedRoute>
+                  }
+                />
+              </Routes>
+            </TrophyModalProvider>
           </AuthProvider>
         </QueryClientProvider>
       </ThemeProvider>

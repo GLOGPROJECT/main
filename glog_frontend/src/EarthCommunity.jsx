@@ -23,14 +23,25 @@
  * ------------------------------------------------------------------
  */
 
-import React, { useRef, useState, useMemo, useEffect, Suspense } from "react";
+import React, { useRef, useState, useMemo, useEffect, useLayoutEffect, useCallback, Suspense } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useGLTF, Html, OrbitControls, useAnimations } from "@react-three/drei";
 import { SkeletonUtils } from "three-stdlib";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "./auth/hooks/useAuth";
+<<<<<<< HEAD
 import api from "./api/axios";
 import PetShopModal from "./components/PetShopModal";
+=======
+import api, { API_ORIGIN } from "./api/axios";
+import PostCard, { HeartIcon } from "./feed/components/PostCard";
+import CommentSection from "./feed/components/CommentSection";
+import { fetchPostById, togglePostLike, toggleTrophyLike } from "./feed/api/feedApi";
+import { streakBadgeEmoji } from "./utils/streakBadgeEmoji";
+import ProjectRegisterModal from "./feed/components/ProjectRegisterModal";
+import { LoginModalProvider } from "./feed/auth/LoginModalContext";
+import { useTrophyModal } from "./feed/trophy/TrophyModalContext";
+>>>>>>> 84367add10e2db92a61dc64d76c796b70f9239ab
 import * as THREE from "three";
 
 // Html 라벨을 body에 붙여 canvas 상위 overflow에 잘리지 않게 함
@@ -48,6 +59,45 @@ const USERS = [
   { id: "u6", name: "Diego",  bio: "게임 개발자 / 상파울루",  lat: -23.55, lon: -46.63, color: "#f9844a", avatar: "/models/avatar/m_6.glb" },
 ];
 
+const AVATAR_POOL = [
+  "/models/avatar/f_1.glb",
+  "/models/avatar/m_2.glb",
+  "/models/avatar/f_4.glb",
+  "/models/avatar/m_4.glb",
+  "/models/avatar/f_7.glb",
+  "/models/avatar/m_6.glb",
+];
+
+// Html 라벨 스크린 좌표: 마커 투영 위치에 최대한 가깝게 두되 캔버스 밖·오른쪽 패널 구역으로 클램프
+function clampHtmlLabelScreenPosition(el, camera, size, profilePanelOpen) {
+  const objectPos = new THREE.Vector3().setFromMatrixPosition(el.matrixWorld);
+  objectPos.project(camera);
+  const widthHalf = size.width / 2;
+  const heightHalf = size.height / 2;
+  let x = objectPos.x * widthHalf + widthHalf;
+  let y = -(objectPos.y * heightHalf) + heightHalf;
+
+  const margin = 12;
+  const labelHalfW = 92;
+  const labelHalfH = 24;
+  const rightReserve = profilePanelOpen ? 368 : 20;
+
+  const minX = margin + labelHalfW;
+  const maxX = Math.max(minX, size.width - margin - labelHalfW - rightReserve);
+  const minY = margin + labelHalfH;
+  const maxY = Math.max(minY, size.height - margin - labelHalfH);
+
+  x = THREE.MathUtils.clamp(x, minX, maxX);
+  y = THREE.MathUtils.clamp(y, minY, maxY);
+  return [x, y];
+}
+
+function pickAvatarByUserId(userId) {
+  const n = Number(userId);
+  const idx = Number.isFinite(n) ? Math.abs(n) % AVATAR_POOL.length : 0;
+  return AVATAR_POOL[idx];
+}
+
 // 위도/경도 → 단위구 위 3D 좌표 (반지름 r)
 function latLonToVec3(lat, lon, r = 1) {
   const phi = THREE.MathUtils.degToRad(90 - lat);
@@ -59,11 +109,27 @@ function latLonToVec3(lat, lon, r = 1) {
   );
 }
 
+/** 카메라(+Z) 쪽으로 표면 마커가 오도록 지구 그룹 회전 스냅 */
+function snapEarthGroupTowardCamera(groupRef, lat, lon) {
+  if (!groupRef?.current) return;
+  const v = latLonToVec3(lat, lon, 1).normalize();
+  const toward = new THREE.Vector3(0, 0, 1);
+  const q = new THREE.Quaternion().setFromUnitVectors(v, toward);
+  groupRef.current.quaternion.copy(q);
+  groupRef.current.updateMatrixWorld(true);
+}
+
+function parseGlobeCoord(raw, fallback) {
+  if (raw == null || raw === "") return fallback;
+  const n = typeof raw === "number" ? raw : parseFloat(String(raw));
+  return Number.isFinite(n) ? n : fallback;
+}
+
 // ──────────────────────────────────────────────────────────────────
 // 2. GLTF 지구 모델 + 유저 마커들
 //    (자전과 마커가 같이 돌도록 한 group 안에 묶음)
 // ──────────────────────────────────────────────────────────────────
-function EarthScene({ autoRotate, onSelectUser, onSceneClick, dragRef, groupRef }) {
+function EarthScene({ users, autoRotate, onSelectUser, onSceneClick, dragRef, groupRef, profilePanelOpen }) {
   const group = groupRef;
   const { scene } = useGLTF("/models/earth/scene.gltf");
 
@@ -101,13 +167,14 @@ function EarthScene({ autoRotate, onSelectUser, onSceneClick, dragRef, groupRef 
       <primitive object={scene} />
 
       {/* 유저 캐릭터 마커들 */}
-      {USERS.map((u) => {
+      {users.map((u) => {
         const pos = latLonToVec3(u.lat, u.lon, MARKER_R);
         return (
           <UserMarker
             key={u.id}
             position={pos}
             user={u}
+            profilePanelOpen={profilePanelOpen}
             onClick={() => onSelectUser(u)}
           />
         );
@@ -119,6 +186,7 @@ function EarthScene({ autoRotate, onSelectUser, onSceneClick, dragRef, groupRef 
 // 미리 로딩
 useGLTF.preload("/models/earth/scene.gltf");
 USERS.forEach((u) => useGLTF.preload(u.avatar));
+AVATAR_POOL.forEach((u) => useGLTF.preload(u));
 
 // ──────────────────────────────────────────────────────────────────
 // 3. 유저 마커 - GLB 아바타 + idle 애니메이션 + 카메라 거리 기반 스케일
@@ -147,10 +215,18 @@ const MIN_SCALE = 0.3;       // 줌아웃 최소 (기본에서 14% 이상 멀어
 const MAX_SCALE = 2.0;       // 줌인 최대 2배 (기본에서 20% 가까워지면 도달)
 const AVATAR_BASE_SCALE = 0.084; // 기본 거리 아바타 크기 (0.028 × 3)
 
-function UserMarker({ position, user, onClick }) {
+function UserMarker({ position, user, onClick, profilePanelOpen }) {
   const scaleRef = useRef();
+  const outerGroupRef = useRef();
+  const labelScaleRef = useRef(null);
   const [hovered, setHovered] = useState(false);
   const { camera } = useThree();
+  const markerWorldPos = useMemo(() => new THREE.Vector3(), []);
+
+  const labelCalculatePosition = useCallback(
+    (el, cam, size) => clampHtmlLabelScreenPosition(el, cam, size, profilePanelOpen),
+    [profilePanelOpen],
+  );
 
   // 지구 표면 법선 방향(position)으로 Y축을 맞추는 쿼터니언 → 아바타가 지표면에 수직으로 섬
   const quaternion = useMemo(() => {
@@ -171,11 +247,21 @@ function UserMarker({ position, user, onClick }) {
     const target = (hovered ? 1.3 : 1.0) * dynamicScale * AVATAR_BASE_SCALE;
     const s = scaleRef.current.scale.x;
     scaleRef.current.scale.setScalar(s + (target - s) * 0.15);
+
+    // 호버 이름 캡슐: 줌인 시 과대 방지 (스크린 위치는 Html calculatePosition에서 클램프)
+    if (labelScaleRef.current && hovered && outerGroupRef.current) {
+      outerGroupRef.current.getWorldPosition(markerWorldPos);
+      const camDist = camera.position.distanceTo(markerWorldPos);
+      let labelScale = THREE.MathUtils.clamp((camDist - 1.08) / 2.15, 0.28, 1.12);
+      if (profilePanelOpen) labelScale = Math.min(labelScale, 0.72);
+      labelScaleRef.current.style.transform = `translateY(14px) scale(${labelScale})`;
+    }
   });
 
   return (
     // 외부 그룹: position + quaternion + 이벤트 담당
     <group
+      ref={outerGroupRef}
       position={position}
       quaternion={quaternion}
       onClick={(e) => { e.stopPropagation(); onClick(); }}
@@ -193,11 +279,12 @@ function UserMarker({ position, user, onClick }) {
       {hovered && (
         <Html
           center
-          distanceFactor={8}
+          distanceFactor={6.5}
+          calculatePosition={labelCalculatePosition}
           portal={htmlLabelPortal}
           style={{ pointerEvents: "none", zIndex: 10000 }}
         >
-          <div style={labelStyle}>{user.name}</div>
+          <div ref={labelScaleRef} style={labelStyle}>{user.name}</div>
         </Html>
       )}
     </group>
@@ -221,7 +308,8 @@ function CameraRig({ selectedUser, earthRef, zoomRef }) {
       const local = latLonToVec3(selectedUser.lat, selectedUser.lon, 1);
       const world = local.clone().applyMatrix4(earthRef.current.matrixWorld);
       // zoom 비율 반영
-      target.copy(world).multiplyScalar(z * 0.73);
+      // z·계수가 너무 작으면 휠 줌인 시 카메라가 구 안쪽으로 들어가는 것처럼 보임 → 표면 밖 여유 확보
+      target.copy(world).multiplyScalar(z * 0.76);
       lookAt.copy(world);
     } else {
       target.set(0, 0, z);
@@ -234,6 +322,152 @@ function CameraRig({ selectedUser, earthRef, zoomRef }) {
   return null;
 }
 
+// 트로피 등급별 설정 — 지구 패널·프로젝트 미리보기 모달에서 공통 사용
+const TROPHY_GRADE = {
+  gold: { src: '/goldtrophy.svg', color: '#f59e0b', label: '금' },
+  silver: { src: '/silvertrophy.svg', color: '#9ca3af', label: '은' },
+  bronze: { src: '/bronzetrophy.svg', color: '#92400e', label: '동' },
+};
+
+function resolveProjectThumb(raw) {
+  if (raw == null) return null;
+  const first = String(raw).split(/[,|\n]+/)[0].trim();
+  if (!first) return null;
+  if (/^https?:\/\//i.test(first)) return first;
+  if (first.startsWith('/')) return `${API_ORIGIN}${first}`;
+  return first;
+}
+
+function resolveMediaUrl(path) {
+  if (path == null || path === '') return null;
+  const s = String(path).trim();
+  if (!s) return null;
+  if (/^https?:\/\//i.test(s)) return s;
+  if (s.startsWith('/')) return `${API_ORIGIN}${s}`;
+  return s;
+}
+
+/** 대표 이미지 필드에 여러 경로가 있을 때 캐러셀용 URL 목록 */
+function parseProjectImageGalleryUrls(raw) {
+  if (raw == null) return [];
+  const s = String(raw).trim();
+  if (!s) return [];
+  if (s.startsWith('[')) {
+    try {
+      const arr = JSON.parse(s);
+      if (Array.isArray(arr)) {
+        return arr.map((x) => resolveMediaUrl(String(x).trim())).filter(Boolean);
+      }
+    } catch {
+      /* fallthrough */
+    }
+  }
+  return s
+    .split(/[,|\n]+/)
+    .map((x) => resolveMediaUrl(x.trim()))
+    .filter(Boolean);
+}
+
+function formatYmdDotFromIso(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}.${m}.${day}`;
+}
+
+function projectDescToBulletLines(desc) {
+  const s = String(desc || '').trim();
+  if (!s) return [];
+  const lines = s.split(/\n+/).map((t) => t.trim()).filter(Boolean);
+  if (lines.length > 1) return lines;
+  return [s];
+}
+
+function buildProjectEditDraftFromPreview(p) {
+  if (!p?.id) return null;
+  const contributors = Array.isArray(p.contributors)
+    ? p.contributors.map((c) => ({
+        user_id: Number(c.user_id),
+        nickname: c.nickname != null ? String(c.nickname) : '',
+        avatar_url: c.avatar_url ?? null,
+      }))
+    : [];
+  return {
+    project_id: Number(p.id),
+    title: String(p.title ?? '').trim(),
+    description: String(p.desc ?? '').trim(),
+    github_url: p.github_url != null ? String(p.github_url) : '',
+    deploy_url: p.deploy_url != null ? String(p.deploy_url) : '',
+    video_url: p.video_url != null ? String(p.video_url) : '',
+    image_url: p.image_url_raw != null ? String(p.image_url_raw) : '',
+    tags: Array.isArray(p.techStacks) ? p.techStacks.map((t) => String(t)) : [],
+    contributors,
+    start_date: p.start_date != null && String(p.start_date).length >= 10 ? String(p.start_date).slice(0, 10) : '',
+    end_date: p.end_date != null && String(p.end_date).length >= 10 ? String(p.end_date).slice(0, 10) : '',
+  };
+}
+
+function mapProjectsApiToTrophyList(data) {
+  const items = Array.isArray(data?.items) ? data.items : [];
+  return items.map((row) => ({
+    id: row.project_id,
+    trophyId: row.trophy_id,
+    title: row.title,
+    desc: String(row.description || '').trim(),
+    image: resolveProjectThumb(row.image_url),
+    image_url_raw: row.image_url ?? null,
+    imageGallery: parseProjectImageGalleryUrls(row.image_url),
+    github_url: row.github_url || null,
+    deploy_url: row.deploy_url || null,
+    video_url: row.video_url || null,
+    techStacks: Array.isArray(row.techStacks) ? row.techStacks : [],
+    dateRange: row.dateRange || '',
+    timeAgo: row.timeAgo || '',
+    grade: row.grade,
+    likes: Number(row.likes ?? 0),
+    comments: Number(row.comments ?? 0),
+    start_date: row.start_date ?? null,
+    end_date: row.end_date ?? null,
+    startDateLabel: formatYmdDotFromIso(row.start_date),
+    endDateLabel: formatYmdDotFromIso(row.end_date),
+    updatedAtLabel: formatYmdDotFromIso(row.updated_at),
+    contributors: Array.isArray(row.contributors) ? row.contributors : [],
+  }));
+}
+
+const trophyFeedCardStyle = {
+  display: 'flex',
+  gap: 10,
+  alignItems: 'flex-start',
+  padding: 10,
+  marginBottom: 8,
+  borderRadius: 12,
+  border: '1px solid rgba(0,0,0,0.08)',
+  background: 'rgba(255,255,255,0.96)',
+  cursor: 'pointer',
+  outline: 'none',
+};
+
+const trophyFeedCardThumbWrap = {
+  width: 48,
+  height: 48,
+  flexShrink: 0,
+  borderRadius: '50%',
+  overflow: 'hidden',
+  background: '#0f172a',
+};
+
+const PROJECT_MODAL_TAG_PALETTE = [
+  { background: '#eef2ff', color: '#4338ca' },
+  { background: '#ecfeff', color: '#0e7490' },
+  { background: '#fef3c7', color: '#b45309' },
+  { background: '#fce7f3', color: '#be185d' },
+  { background: '#ecfccb', color: '#3f6212' },
+];
+
 // ──────────────────────────────────────────────────────────────────
 // 5. 메인 컴포넌트
 // ──────────────────────────────────────────────────────────────────
@@ -245,17 +479,171 @@ export default function EarthCommunity() {
   // 새 DM·알림 여부 - 읽으면 false로 변경 (데모: 각각 1개씩 온 상태)
   const [hasNewDm, setHasNewDm] = useState(true);
   const [hasNewNotif, setHasNewNotif] = useState(true);
+  const [globePostModalId, setGlobePostModalId] = useState(null);
+  const [globeProjectPreview, setGlobeProjectPreview] = useState(null);
+  const [globeProjectLikeBusy, setGlobeProjectLikeBusy] = useState(false);
+  const [globeProjectEditOpen, setGlobeProjectEditOpen] = useState(false);
+  const [globeProjectEditDraft, setGlobeProjectEditDraft] = useState(null);
+  const [globeProjectSlideIdx, setGlobeProjectSlideIdx] = useState(0);
+  const [globeProjectTagsExpanded, setGlobeProjectTagsExpanded] = useState(false);
+  const [globeProjectShareHint, setGlobeProjectShareHint] = useState('');
+  const globeProjectCommentsRef = useRef(null);
+  const [trophyRefreshKey, setTrophyRefreshKey] = useState(0);
+  const [earthPanelPostListRefreshKey, setEarthPanelPostListRefreshKey] = useState(0);
+  const [globeModalPost, setGlobeModalPost] = useState(null);
+  const [globeModalLoad, setGlobeModalLoad] = useState("idle");
+  const globeModalBodyRef = useRef(null);
+  const [globeModalScrollRoot, setGlobeModalScrollRoot] = useState(null);
   const earthRef = useRef();
   const dragRef = useRef({ dragging: false, lastX: 0, lastY: 0, deltaX: 0, deltaY: 0, pausedUntil: 0 });
-  const zoomRef = useRef(3); // 카메라 Z 거리 (기본 3, 범위 1.5~6)
+  const zoomRef = useRef(3); // 카메라 Z 거리 (기본 3). 유저 미선택 1.5~6, 선택 시 더 큰 하한으로 구 관통 방지
+  const GLOBE_ZOOM_MIN = 1.5;
+  const GLOBE_ZOOM_MIN_SELECTED = 2.05;
 
   // 프로필 페이지 이동을 위한 navigate, 로그인 유저 정보
   const navigate = useNavigate();
-  const { user: me, updateUser } = useAuth();
+  const location = useLocation();
+  const { user: me, updateUser, logout } = useAuth();
+  const { openTrophyModal } = useTrophyModal();
 
   // 마커 클릭과 빈 배경 클릭을 구분하기 위한 ref
   // 마커 클릭 시 true로 설정 → 캔버스 onClick에서 패널 닫힘 방지
   const markerClickedRef = useRef(false);
+
+  const globeUsers = useMemo(() => {
+    if (!me?.user_id) return USERS;
+    const hasMe = USERS.some((u) => String(u.id) === String(me.user_id));
+    if (hasMe) return USERS;
+    const lat = parseGlobeCoord(me.globe_lat, 37.56);
+    const lon = parseGlobeCoord(me.globe_lon, 126.97);
+    const meUser = {
+      id: String(me.user_id),
+      name: me.nickname || me.username || me.name || `user-${me.user_id}`,
+      bio: me.bio || "내 프로필",
+      lat,
+      lon,
+      color: "#4e9af1",
+      avatar: pickAvatarByUserId(me.user_id),
+      avatar_url: me.avatar_url || null,
+      isMe: true,
+      status: me.status || "offline",
+    };
+    return [meUser, ...USERS];
+  }, [me]);
+
+  const buildMePanelUser = useMemo(() => {
+    if (!me?.user_id) return null;
+    const lat = parseGlobeCoord(me.globe_lat, 37.56);
+    const lon = parseGlobeCoord(me.globe_lon, 126.97);
+    return {
+      id: me.user_id,
+      name: me.nickname || me.username || me.name || `user-${me.user_id}`,
+      bio: me.bio || "",
+      color: "#4e9af1",
+      avatar_url: me.avatar_url || null,
+      lat,
+      lon,
+      status: me.status || "online",
+      isMe: true,
+    };
+  }, [me]);
+
+  useEffect(() => {
+    if (location.state?.openMyProfile !== true || !buildMePanelUser) return;
+    markerClickedRef.current = true;
+    setActiveNav("프로필");
+    setSelectedUser(buildMePanelUser);
+    dragRef.current.pausedUntil = Date.now() + 4000;
+    // navigate로 state를 지우면 effect cleanup이 rAF를 취소할 수 있어, 스냅은 cleanup 없이 예약
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        snapEarthGroupTowardCamera(earthRef, buildMePanelUser.lat, buildMePanelUser.lon);
+      });
+    });
+    navigate(location.pathname, { replace: true, state: {} });
+  }, [location.state, location.pathname, buildMePanelUser, navigate]);
+
+  useEffect(() => {
+    if (!globePostModalId) {
+      setGlobeModalPost(null);
+      setGlobeModalLoad("idle");
+      return undefined;
+    }
+    let cancelled = false;
+    setGlobeModalLoad("loading");
+    fetchPostById(globePostModalId)
+      .then((p) => {
+        if (cancelled) return;
+        if (p) {
+          setGlobeModalPost(p);
+          setGlobeModalLoad("ok");
+        } else {
+          setGlobeModalPost(null);
+          setGlobeModalLoad("error");
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setGlobeModalPost(null);
+        setGlobeModalLoad("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [globePostModalId]);
+
+  useLayoutEffect(() => {
+    if (!globePostModalId) {
+      setGlobeModalScrollRoot(null);
+      return;
+    }
+    setGlobeModalScrollRoot(globeModalBodyRef.current);
+  }, [globePostModalId, globeModalLoad, globeModalPost]);
+
+  useEffect(() => {
+    if (!globePostModalId && !globeProjectPreview) return undefined;
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      if (globeProjectPreview) setGlobeProjectPreview(null);
+      else if (globePostModalId) setGlobePostModalId(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [globePostModalId, globeProjectPreview]);
+
+  const bumpGlobeModalCommentCount = useCallback((delta) => {
+    setGlobeModalPost((p) => {
+      if (!p) return p;
+      return { ...p, commentsCount: Math.max(0, (p.commentsCount || 0) + delta) };
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!globeProjectPreview) {
+      setGlobeProjectShareHint('');
+      return;
+    }
+    setGlobeProjectSlideIdx(0);
+    setGlobeProjectTagsExpanded(false);
+  }, [globeProjectPreview?.id]);
+
+  const globeProjectGallery = useMemo(() => {
+    const p = globeProjectPreview;
+    if (!p) return [];
+    const g = p.imageGallery;
+    if (Array.isArray(g) && g.length) return g;
+    return p.image ? [p.image] : [];
+  }, [globeProjectPreview]);
+
+  const globeProjectMainImg =
+    globeProjectGallery.length > 0
+      ? globeProjectGallery[Math.min(globeProjectSlideIdx, globeProjectGallery.length - 1)]
+      : null;
+
+  const globeProjectDescLines = useMemo(
+    () => (globeProjectPreview ? projectDescToBulletLines(globeProjectPreview.desc) : []),
+    [globeProjectPreview?.desc],
+  );
 
   // 자동 회전: 선택된 유저가 없을 때만
   const autoRotate = !selectedUser;
@@ -302,13 +690,74 @@ export default function EarthCommunity() {
     return () => window.removeEventListener("pointerup", handlePointerUp);
   }, []);
 
-  // 마우스 휠로 지구 확대/축소
+  // 마우스 휠로 지구 확대/축소 (프로필/마커 선택 시 하한을 올려 카메라가 지구를 뚫지 않게)
   const handleWheel = (e) => {
     e.preventDefault();
-    zoomRef.current = Math.max(1.5, Math.min(6, zoomRef.current + e.deltaY * 0.005));
+    const zMin = selectedUser ? GLOBE_ZOOM_MIN_SELECTED : GLOBE_ZOOM_MIN;
+    zoomRef.current = Math.max(zMin, Math.min(6, zoomRef.current + e.deltaY * 0.005));
+  };
+
+  useEffect(() => {
+    if (!selectedUser) return;
+    if (zoomRef.current < GLOBE_ZOOM_MIN_SELECTED) zoomRef.current = GLOBE_ZOOM_MIN_SELECTED;
+  }, [selectedUser]);
+
+  const globePostModalBackdropStyle = {
+    position: "fixed",
+    inset: 0,
+    zIndex: 12000,
+    background: "rgba(15, 28, 54, 0.45)",
+  };
+  const globePostModalPanelStyle = {
+    position: "fixed",
+    left: "50%",
+    top: "50%",
+    transform: "translate(-50%, -50%)",
+    width: "min(780px, calc(100vw - 24px))",
+    maxHeight: "min(88vh, 920px)",
+    zIndex: 12001,
+    display: "flex",
+    flexDirection: "column",
+    background: "var(--feed-surface-elevated, rgba(255,255,255,0.98))",
+    color: "var(--feed-text, #0f172a)",
+    borderRadius: 16,
+    boxShadow: "0 12px 40px rgba(0,0,0,0.35)",
+    border: "1px solid var(--feed-border-subtle, rgba(15,23,42,0.12))",
+    overflow: "hidden",
+  };
+  const globePostModalHeaderStyle = {
+    flexShrink: 0,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "10px 12px",
+    borderBottom: "1px solid var(--feed-border-subtle, rgba(15,23,42,0.1))",
+  };
+  const globePostModalBodyStyle = {
+    flex: 1,
+    minHeight: 0,
+    overflowY: "auto",
+    WebkitOverflowScrolling: "touch",
+    padding: "10px 12px 16px",
+  };
+  const globePostModalCloseStyle = {
+    border: "none",
+    background: "transparent",
+    fontSize: "1.35rem",
+    lineHeight: 1,
+    cursor: "pointer",
+    color: "inherit",
+    padding: "0 6px",
+    opacity: 0.7,
+  };
+  const globeProjectModalPanelStyle = {
+    ...globePostModalPanelStyle,
+    width: "min(960px, calc(100vw - 24px))",
+    maxHeight: "min(90vh, 900px)",
   };
 
   return (
+    <LoginModalProvider isLoggedIn={Boolean(me)}>
     <div style={wrapperStyle}>
       <div style={canvasHostStyle} onClick={handleCanvasClick}>
         <div
@@ -322,7 +771,9 @@ export default function EarthCommunity() {
             <directionalLight position={[5, 3, 5]} intensity={1.1} />
             <Suspense fallback={null}>
               <EarthScene
+                users={globeUsers}
                 autoRotate={autoRotate}
+                profilePanelOpen={Boolean(selectedUser)}
                 onSelectUser={(u) => {
                   // 마커 클릭임을 표시 → 캔버스 onClick이 패널을 닫지 않도록
                   markerClickedRef.current = true;
@@ -370,26 +821,43 @@ export default function EarthCommunity() {
             <button
               key={item}
               className={`globe-nav-item${activeNav === item ? ' active' : ''}`}
-              onClick={() => {
+              onClick={async () => {
                 if (item === '프로필') {
-                  // 프로필 active 강조 표시 + 패널 열기
                   setActiveNav('프로필');
                   if (me) {
-                    // globe_lat/globe_lon → lat/lon 매핑, status 포함하여 전달
+                    const lat = parseGlobeCoord(me.globe_lat, 37.56);
+                    const lon = parseGlobeCoord(me.globe_lon, 126.97);
+                    dragRef.current.pausedUntil = Date.now() + 4000;
+                    markerClickedRef.current = true;
                     setSelectedUser({
                       id: me.user_id,
                       name: me.nickname,
                       bio: me.bio || '',
                       color: '#4e9af1',
                       avatar_url: me.avatar_url,
-                      lat: me.globe_lat,
-                      lon: me.globe_lon,
+                      lat,
+                      lon,
                       status: me.status || 'offline',
                       isMe: true,
                     });
+                    requestAnimationFrame(() => {
+                      requestAnimationFrame(() => {
+                        snapEarthGroupTowardCamera(earthRef, lat, lon);
+                      });
+                    });
                   }
+<<<<<<< HEAD
                 } else if (item === '상점') {
                   setShowShop(true);
+=======
+                } else if (item === '피드') {
+                  navigate('/feed');
+                } else if (item === '트로피') {
+                  openTrophyModal();
+                } else if (item === '로그아웃') {
+                  await logout();
+                  navigate('/', { replace: true });
+>>>>>>> 84367add10e2db92a61dc64d76c796b70f9239ab
                 } else {
                   // 나머지 메뉴는 시각적 선택 효과만 (추후 각 기능 구현)
                   setActiveNav(item);
@@ -407,10 +875,12 @@ export default function EarthCommunity() {
 
       {/* 유저 상세 패널 - 캐릭터 클릭 시 오른쪽에서 슬라이드 인 */}
       <UserPanel
+        viewer={me}
         user={selectedUser}
         onClose={() => {
           setSelectedUser(null);
           setActiveNav(null);
+          setGlobeProjectPreview(null);
         }}
         onViewProfile={(userId) => navigate(`/profile/${userId}`)}
         onStatusChange={(newStatus) => updateUser({ status: newStatus })}
@@ -418,8 +888,592 @@ export default function EarthCommunity() {
         hasNewNotif={hasNewNotif}
         onDmClick={() => setHasNewDm(false)}
         onNotifClick={() => setHasNewNotif(false)}
+        onOpenFeedPost={(pid) => setGlobePostModalId(String(pid))}
+        onViewMorePosts={(nickname) => {
+          const uid = Number(selectedUser?.id);
+          if (!Number.isFinite(uid) || uid <= 0) return;
+          const nick = String(nickname ?? '').trim() || String(selectedUser?.name ?? '').trim();
+          navigate(`/feed/user/${uid}`, nick ? { state: { nickname: nick } } : undefined);
+        }}
+        trophyRefreshKey={trophyRefreshKey}
+        postListRefreshKey={earthPanelPostListRefreshKey}
+        onPostLikeUpdated={(detail) => {
+          setGlobeModalPost((prev) => {
+            if (!prev || Number(prev.id) !== Number(detail.postId)) return prev;
+            return { ...prev, likes: detail.likeCount, isLiked: detail.liked };
+          });
+        }}
+        onOpenProject={(p) => setGlobeProjectPreview(p)}
+      />
+
+      {globePostModalId ? (
+        <div
+          role="presentation"
+          style={globePostModalBackdropStyle}
+          onClick={() => setGlobePostModalId(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="게시글 미리보기"
+            className="feed-post-popup-modal"
+            style={globePostModalPanelStyle}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={globePostModalHeaderStyle}>
+              <span style={{ fontWeight: 700, fontSize: "0.95rem" }}>게시글</span>
+              <button
+                type="button"
+                style={globePostModalCloseStyle}
+                aria-label="닫기"
+                onClick={() => setGlobePostModalId(null)}
+              >
+                ×
+              </button>
+            </div>
+            <div ref={globeModalBodyRef} style={globePostModalBodyStyle}>
+              {globeModalLoad === "loading" ? (
+                <p className="feed-post-meta" style={{ margin: "1rem" }}>불러오는 중…</p>
+              ) : globeModalLoad === "error" || !globeModalPost ? (
+                <p className="feed-compose-error" style={{ margin: "1rem" }}>게시글을 불러오지 못했습니다.</p>
+              ) : (
+                <>
+                  <PostCard
+                    post={globeModalPost}
+                    variant="static"
+                    onLikeChange={() => setEarthPanelPostListRefreshKey((k) => k + 1)}
+                  />
+                  <div className="feed-post-popup-modal-comments-wrap">
+                    <CommentSection
+                      postId={String(globePostModalId)}
+                      onCommentCountChange={bumpGlobeModalCommentCount}
+                      intersectionRoot={globeModalScrollRoot}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {globeProjectPreview ? (
+        <div
+          role="presentation"
+          style={globePostModalBackdropStyle}
+          onClick={() => setGlobeProjectPreview(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="프로젝트"
+            style={globeProjectModalPanelStyle}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ ...globePostModalHeaderStyle, gap: 8, flexWrap: "wrap" }}>
+              <span style={{ fontWeight: 700, fontSize: "0.95rem", flexShrink: 0 }}>프로젝트</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: "auto", flexWrap: "wrap" }}>
+                {globeProjectPreview.ownerProfile?.isOwnerMe && me?.user_id ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const draft = buildProjectEditDraftFromPreview(globeProjectPreview);
+                        if (draft) {
+                          setGlobeProjectEditDraft(draft);
+                          setGlobeProjectEditOpen(true);
+                        }
+                      }}
+                      style={{
+                        padding: "4px 10px",
+                        fontSize: "0.76rem",
+                        fontWeight: 600,
+                        borderRadius: 8,
+                        border: "1px solid rgba(15,23,42,0.15)",
+                        background: "#fff",
+                        color: "#374151",
+                        cursor: "pointer",
+                      }}
+                    >
+                      수정
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!window.confirm("이 프로젝트를 삭제할까요? 트로피도 함께 삭제됩니다.")) return;
+                        try {
+                          await api.delete(`/projects/${globeProjectPreview.id}`);
+                          setGlobeProjectPreview(null);
+                          setTrophyRefreshKey((k) => k + 1);
+                        } catch (err) {
+                          const msg = err.response?.data?.message;
+                          if (msg) console.warn("[project delete]", msg);
+                        }
+                      }}
+                      style={{
+                        padding: "4px 10px",
+                        fontSize: "0.76rem",
+                        fontWeight: 600,
+                        borderRadius: 8,
+                        border: "1px solid #fecaca",
+                        background: "#fef2f2",
+                        color: "#b91c1c",
+                        cursor: "pointer",
+                      }}
+                    >
+                      삭제
+                    </button>
+                  </>
+                ) : null}
+                <button
+                  type="button"
+                  style={globePostModalCloseStyle}
+                  aria-label="닫기"
+                  onClick={() => setGlobeProjectPreview(null)}
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+            <div style={{ ...globePostModalBodyStyle, maxHeight: "min(82vh, 720px)", padding: "12px 14px 14px" }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start" }}>
+                <div style={{ flex: "1 1 280px", minWidth: 0 }}>
+                  <div
+                    style={{
+                      width: "100%",
+                      aspectRatio: "16 / 10",
+                      borderRadius: 12,
+                      overflow: "hidden",
+                      background: "#0f172a",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    {globeProjectMainImg ? (
+                      <img src={globeProjectMainImg} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    ) : (
+                      <span style={{ color: "#64748b", fontSize: "2rem" }} aria-hidden>
+                        📁
+                      </span>
+                    )}
+                  </div>
+                  {globeProjectGallery.length > 1 ? (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
+                      <button
+                        type="button"
+                        aria-label="이전 이미지"
+                        onClick={() =>
+                          setGlobeProjectSlideIdx((i) => (i - 1 + globeProjectGallery.length) % globeProjectGallery.length)
+                        }
+                        style={{
+                          flexShrink: 0,
+                          width: 32,
+                          height: 32,
+                          borderRadius: 8,
+                          border: "1px solid rgba(15,23,42,0.12)",
+                          background: "#fff",
+                          cursor: "pointer",
+                        }}
+                      >
+                        ‹
+                      </button>
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: 6,
+                          overflowX: "auto",
+                          flex: 1,
+                          minWidth: 0,
+                          paddingBottom: 2,
+                        }}
+                      >
+                        {globeProjectGallery.map((url, i) => (
+                          <button
+                            key={`${url}-${i}`}
+                            type="button"
+                            onClick={() => setGlobeProjectSlideIdx(i)}
+                            style={{
+                              flexShrink: 0,
+                              width: 52,
+                              height: 52,
+                              borderRadius: 8,
+                              overflow: "hidden",
+                              padding: 0,
+                              border:
+                                i === Math.min(globeProjectSlideIdx, globeProjectGallery.length - 1)
+                                  ? "2px solid #2563eb"
+                                  : "1px solid rgba(15,23,42,0.12)",
+                              cursor: "pointer",
+                              background: "#0f172a",
+                            }}
+                          >
+                            <img src={url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                          </button>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="다음 이미지"
+                        onClick={() =>
+                          setGlobeProjectSlideIdx((i) => (i + 1) % globeProjectGallery.length)
+                        }
+                        style={{
+                          flexShrink: 0,
+                          width: 32,
+                          height: 32,
+                          borderRadius: 8,
+                          border: "1px solid rgba(15,23,42,0.12)",
+                          background: "#fff",
+                          cursor: "pointer",
+                        }}
+                      >
+                        ›
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+                <div style={{ flex: "1 1 300px", minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {TROPHY_GRADE[globeProjectPreview.grade] ? (
+                      <img
+                        src={TROPHY_GRADE[globeProjectPreview.grade].src}
+                        alt=""
+                        style={{ width: 36, height: "auto", objectFit: "contain" }}
+                      />
+                    ) : (
+                      <span style={{ fontSize: "1.5rem" }} aria-hidden>
+                        🏆
+                      </span>
+                    )}
+                    <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "#64748b" }}>
+                      {TROPHY_GRADE[globeProjectPreview.grade]
+                        ? `${TROPHY_GRADE[globeProjectPreview.grade].label} 트로피`
+                        : "트로피"}
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+                    <h3
+                      style={{
+                        margin: 0,
+                        fontSize: "1.12rem",
+                        fontWeight: 800,
+                        color: "#0f172a",
+                        lineHeight: 1.25,
+                        flex: 1,
+                        minWidth: 0,
+                      }}
+                    >
+                      {globeProjectPreview.title}
+                    </h3>
+                    <button
+                      type="button"
+                      className="feed-post-like-btn"
+                      data-liked={globeProjectPreview.liked ? "true" : "false"}
+                      disabled={globeProjectLikeBusy || !me?.user_id}
+                      aria-label={globeProjectPreview.liked ? "좋아요 취소" : "좋아요"}
+                      onClick={async () => {
+                        if (!globeProjectPreview?.trophyId || !me?.user_id || globeProjectLikeBusy) return;
+                        setGlobeProjectLikeBusy(true);
+                        try {
+                          const { liked, likeCount } = await toggleTrophyLike(globeProjectPreview.trophyId);
+                          setGlobeProjectPreview((prev) => (prev ? { ...prev, likes: likeCount, liked } : prev));
+                          setTrophyRefreshKey((k) => k + 1);
+                        } catch {
+                          /* 유지 */
+                        } finally {
+                          setGlobeProjectLikeBusy(false);
+                        }
+                      }}
+                      style={{ display: "inline-flex", alignItems: "center", gap: 4, flexShrink: 0 }}
+                    >
+                      <HeartIcon filled={globeProjectPreview.liked} />
+                      <span style={{ fontSize: "0.86rem", fontWeight: 600 }}>{globeProjectPreview.likes}</span>
+                    </button>
+                  </div>
+                  {globeProjectDescLines.length ? (
+                    <ul
+                      style={{
+                        margin: 0,
+                        paddingLeft: 18,
+                        fontSize: "0.84rem",
+                        lineHeight: 1.55,
+                        color: "#374151",
+                      }}
+                    >
+                      {globeProjectDescLines.map((line, idx) => (
+                        <li key={idx}>{line}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                    {globeProjectPreview.github_url ? (
+                      <a
+                        href={globeProjectPreview.github_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                          padding: "8px 12px",
+                          borderRadius: 10,
+                          background: "#f8fafc",
+                          border: "1px solid rgba(15,23,42,0.1)",
+                          fontSize: "0.78rem",
+                          fontWeight: 600,
+                          color: "#0f172a",
+                          textDecoration: "none",
+                          maxWidth: "100%",
+                        }}
+                      >
+                        <span aria-hidden>🔗</span>
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>GitHub</span>
+                      </a>
+                    ) : null}
+                    {globeProjectPreview.deploy_url ? (
+                      <a
+                        href={globeProjectPreview.deploy_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                          padding: "8px 12px",
+                          borderRadius: 10,
+                          background: "#f8fafc",
+                          border: "1px solid rgba(15,23,42,0.1)",
+                          fontSize: "0.78rem",
+                          fontWeight: 600,
+                          color: "#0f172a",
+                          textDecoration: "none",
+                          maxWidth: "100%",
+                        }}
+                      >
+                        <span aria-hidden>🌐</span>
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>배포</span>
+                      </a>
+                    ) : null}
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 12, fontSize: "0.78rem", color: "#64748b" }}>
+                    {globeProjectPreview.startDateLabel ? (
+                      <span>
+                        <strong style={{ color: "#475569" }}>시작일</strong> {globeProjectPreview.startDateLabel}
+                      </span>
+                    ) : null}
+                    {globeProjectPreview.endDateLabel ? (
+                      <span>
+                        <strong style={{ color: "#475569" }}>완성일</strong> {globeProjectPreview.endDateLabel}
+                      </span>
+                    ) : null}
+                    {!globeProjectPreview.startDateLabel &&
+                    !globeProjectPreview.endDateLabel &&
+                    globeProjectPreview.dateRange ? (
+                      <span>{globeProjectPreview.dateRange}</span>
+                    ) : null}
+                  </div>
+                  {globeProjectPreview.video_url ? (
+                    <a
+                      href={globeProjectPreview.video_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ fontSize: "0.78rem", color: "#2563eb", fontWeight: 600 }}
+                    >
+                      동영상 링크
+                    </a>
+                  ) : null}
+                  {(globeProjectPreview.techStacks || []).length > 0 ? (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                      {(globeProjectTagsExpanded
+                        ? globeProjectPreview.techStacks
+                        : globeProjectPreview.techStacks.slice(0, 5)
+                      ).map((name, idx) => (
+                        <span
+                          key={`${name}-${idx}`}
+                          style={{
+                            fontSize: "0.72rem",
+                            padding: "3px 9px",
+                            borderRadius: 999,
+                            fontWeight: 600,
+                            ...PROJECT_MODAL_TAG_PALETTE[idx % PROJECT_MODAL_TAG_PALETTE.length],
+                          }}
+                        >
+                          #{name}
+                        </span>
+                      ))}
+                      {globeProjectPreview.techStacks.length > 5 ? (
+                        <button
+                          type="button"
+                          onClick={() => setGlobeProjectTagsExpanded((v) => !v)}
+                          style={{
+                            fontSize: "0.72rem",
+                            border: "none",
+                            background: "transparent",
+                            color: "#2563eb",
+                            fontWeight: 600,
+                            cursor: "pointer",
+                          }}
+                        >
+                          {globeProjectTagsExpanded ? "접기" : "더보기"}
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+              <div
+                style={{
+                  marginTop: 18,
+                  paddingTop: 12,
+                  borderTop: "1px solid rgba(15,23,42,0.08)",
+                  display: "flex",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  gap: 12,
+                  justifyContent: "space-between",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                  {resolveMediaUrl(globeProjectPreview.ownerProfile?.avatar_url) ? (
+                    <img
+                      src={resolveMediaUrl(globeProjectPreview.ownerProfile?.avatar_url)}
+                      alt=""
+                      style={{ width: 40, height: 40, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }}
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: "50%",
+                        background: "#e2e8f0",
+                        flexShrink: 0,
+                      }}
+                    />
+                  )}
+                  <div style={{ minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontWeight: 700,
+                        fontSize: "0.84rem",
+                        color: "#0f172a",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {globeProjectPreview.ownerProfile?.nickname || "—"}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: "0.74rem",
+                        color: "#64748b",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {globeProjectPreview.ownerProfile?.bio != null &&
+                      String(globeProjectPreview.ownerProfile.bio).trim() !== ""
+                        ? globeProjectPreview.ownerProfile.bio
+                        : "\u00a0"}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const url =
+                        globeProjectPreview.deploy_url ||
+                        globeProjectPreview.github_url ||
+                        window.location.href;
+                      try {
+                        if (navigator.share) {
+                          await navigator.share({
+                            title: globeProjectPreview.title,
+                            text: globeProjectPreview.desc,
+                            url: String(url),
+                          });
+                        } else if (navigator.clipboard?.writeText) {
+                          await navigator.clipboard.writeText(String(url));
+                          setGlobeProjectShareHint("링크를 클립보드에 복사했어요.");
+                          window.setTimeout(() => setGlobeProjectShareHint(""), 2500);
+                        }
+                      } catch {
+                        /* 공유 취소 등 */
+                      }
+                    }}
+                    style={{
+                      padding: "6px 12px",
+                      fontSize: "0.78rem",
+                      fontWeight: 600,
+                      borderRadius: 8,
+                      border: "1px solid rgba(15,23,42,0.12)",
+                      background: "#fff",
+                      color: "#334155",
+                      cursor: "pointer",
+                    }}
+                  >
+                    공유하기
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      globeProjectCommentsRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+                      globeProjectCommentsRef.current?.focus?.();
+                    }}
+                    style={{
+                      padding: "6px 14px",
+                      fontSize: "0.78rem",
+                      fontWeight: 700,
+                      borderRadius: 8,
+                      border: "none",
+                      background: "#2563eb",
+                      color: "#fff",
+                      cursor: "pointer",
+                    }}
+                  >
+                    댓글달기
+                  </button>
+                </div>
+              </div>
+              <div style={{ width: "100%", textAlign: "right", marginTop: 8 }}>
+                {globeProjectPreview.updatedAtLabel ? (
+                  <p className="feed-post-meta" style={{ margin: 0, fontSize: "0.72rem", color: "#94a3b8" }}>
+                    마지막 업데이트 {globeProjectPreview.updatedAtLabel}
+                  </p>
+                ) : null}
+                {globeProjectShareHint ? (
+                  <p style={{ margin: "4px 0 0", fontSize: "0.72rem", color: "#2563eb" }}>{globeProjectShareHint}</p>
+                ) : null}
+              </div>
+              <div ref={globeProjectCommentsRef} tabIndex={-1} style={{ outline: "none", marginTop: 10 }}>
+                <p style={{ margin: 0, fontSize: "0.76rem", color: "#94a3b8" }}>프로젝트 댓글은 준비 중이에요.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <ProjectRegisterModal
+        open={globeProjectEditOpen}
+        onClose={() => {
+          setGlobeProjectEditOpen(false);
+          setGlobeProjectEditDraft(null);
+        }}
+        mode="edit"
+        initialDraft={globeProjectEditDraft}
+        onSuccess={() => {
+          setGlobeProjectEditOpen(false);
+          setGlobeProjectEditDraft(null);
+          setGlobeProjectPreview(null);
+          setTrophyRefreshKey((k) => k + 1);
+        }}
       />
     </div>
+    </LoginModalProvider>
   );
 }
 
@@ -452,41 +1506,13 @@ const DUMMY_POSTS = [
   { id: 5, content: 'Prisma ORM 처음 써봤는데 타입 자동완성이 진짜 편하다 ✨', likes: 9, comments: 1, timeAgo: '3일 전' },
 ];
 
-// 트로피 등급별 설정 - SVG 파일 경로 사용
-const TROPHY_GRADE = {
-  gold:   { src: '/goldtrophy.svg',   color: '#f59e0b', label: '금' },
-  silver: { src: '/silvertrophy.svg', color: '#9ca3af', label: '은' },
-  bronze: { src: '/bronzetrophy.svg', color: '#92400e', label: '동' },
-};
-
-// 프로젝트(트로피) 더미 - image: null 일 때 썸네일 플레이스홀더 사용
-const DUMMY_TROPHIES = [
-  {
-    id: 1, image: null, title: 'DevGlobe',
-    desc: '개발자들을 위한 SNS 플랫폼. 프로젝트 공유, 피드, 상점 등 다양한 기능을 제공해요.',
-    techStacks: ['React', 'TypeScript', 'Node.js'], dateRange: '2024.01.10 ~ 2024.03.20',
-    timeAgo: '2시간 전', grade: 'gold', likes: 58, comments: 12,
-  },
-  {
-    id: 2, image: null, title: 'FocusMind',
-    desc: '집중력 향상을 위한 타이머 & 백색소음 앱. 포모도로 타이머와 통계 기능을 제공해요.',
-    techStacks: ['React Native', 'TypeScript'], dateRange: '2024.02.05 ~ 2024.03.15',
-    timeAgo: '5시간 전', grade: 'silver', likes: 32, comments: 7,
-  },
-  {
-    id: 3, image: null, title: 'DataFlow',
-    desc: '데이터 시각화 대시보드 서비스. 실시간 데이터 분석과 다양한 차트를 지원해요.',
-    techStacks: ['Next.js', 'TypeScript', 'Tailwind CSS'], dateRange: '2024.01.20 ~ 2024.03.01',
-    timeAgo: '1일 전', grade: 'bronze', likes: 21, comments: 4,
-  },
-];
-
 // hasNewDm, hasNewNotif: 새 메시지·알림 여부 → true면 아이콘 왼쪽 하단에 빨간 점 표시
 // onDmClick / onNotifClick: 아이콘 클릭 시 부모에서 읽음 처리
-function UserPanel({ user, onClose, onViewProfile, onStatusChange, hasNewDm = false, hasNewNotif = false, onDmClick, onNotifClick }) {
+function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNewDm = false, hasNewNotif = false, onDmClick, onNotifClick, onOpenFeedPost, onViewMorePosts, onOpenProject, trophyRefreshKey = 0, postListRefreshKey = 0, onPostLikeUpdated }) {
   const open = !!user;
 
   const [profileData, setProfileData] = useState(null);
+  const [userPosts, setUserPosts] = useState([]);
   const [statusOpen, setStatusOpen] = useState(false);
   const [currentStatus, setCurrentStatus] = useState('offline');
   const [activeTab, setActiveTab] = useState('posts');
@@ -494,27 +1520,148 @@ function UserPanel({ user, onClose, onViewProfile, onStatusChange, hasNewDm = fa
   const [likedSet, setLikedSet] = useState(new Set());
   // 내 글/트로피 카드 펼치기 모드 (true: 확장, false: 기본)
   const [isExpanded, setIsExpanded] = useState(false);
+  const [trophyList, setTrophyList] = useState([]);
+  const [trophiesLoad, setTrophiesLoad] = useState('idle'); // idle | loading | ok | error
+  const [trophySort, setTrophySort] = useState('latest'); // 'latest' | 'popular'
+  const [postSort, setPostSort] = useState('latest'); // 'latest' | 'popular'
+
+  const applyProjectsResponse = useCallback((data) => {
+    const items = Array.isArray(data?.items) ? data.items : [];
+    setTrophyList(mapProjectsApiToTrophyList(data));
+    setLikedSet((prev) => {
+      const next = new Set([...prev].filter((k) => String(k).startsWith('t_')));
+      items.forEach((row) => {
+        if (row.liked_by_me) next.add(`t_${row.trophy_id}`);
+      });
+      return next;
+    });
+    setTrophiesLoad('ok');
+  }, []);
+
+  useEffect(() => {
+    if (!user?.id) {
+      setTrophyList([]);
+      setTrophiesLoad('idle');
+      return;
+    }
+    const uid = Number(user.id);
+    if (!Number.isFinite(uid) || uid <= 0) {
+      setTrophyList([]);
+      setTrophiesLoad('idle');
+      return;
+    }
+    let cancelled = false;
+    setTrophiesLoad('loading');
+    const sortParam = trophySort === 'popular' ? 'popular' : 'latest';
+    api
+      .get(`/projects/user/${uid}`, { params: { sort: sortParam } })
+      .then(({ data }) => {
+        if (!cancelled) applyProjectsResponse(data);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTrophyList([]);
+          setTrophiesLoad('error');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, trophySort, trophyRefreshKey, applyProjectsResponse]);
+
+  useEffect(() => {
+    if (!user?.id) {
+      setUserPosts([]);
+      return;
+    }
+    const uid = Number(user.id);
+    if (!Number.isFinite(uid) || uid <= 0) {
+      setUserPosts([]);
+      return;
+    }
+    let cancelled = false;
+    const sortParam = postSort === 'popular' ? 'popular' : 'latest';
+    api
+      .get(`/feed/user/${uid}`, { params: { limit: 10, sort: sortParam } })
+      .then(({ data }) => {
+        if (cancelled) return;
+        const rows = Array.isArray(data?.posts) ? data.posts : [];
+        setUserPosts(
+          rows.map((p) => ({
+            id: p.post_id,
+            isFeedPost: true,
+            content: String(p.content || '').trim(),
+            likes: Number(p.like_count ?? 0),
+            comments: Number(p.comment_count ?? 0),
+            isLiked: Boolean(p.isLiked),
+            timeAgo: (() => {
+              try {
+                const created = new Date(p.created_at);
+                const diffMin = Math.max(0, Math.floor((Date.now() - created.getTime()) / 60000));
+                if (diffMin < 60) return `${diffMin}분 전`;
+                const h = Math.floor(diffMin / 60);
+                if (h < 24) return `${h}시간 전`;
+                const d = Math.floor(h / 24);
+                return `${d}일 전`;
+              } catch {
+                return '';
+              }
+            })(),
+          })),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setUserPosts([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, postSort, postListRefreshKey]);
 
   useEffect(() => {
     if (!user) {
       setProfileData(null);
+      setUserPosts([]);
       setStatusOpen(false);
       setIsExpanded(false);
+      setTrophyList([]);
+      setTrophiesLoad('idle');
       return;
     }
     setCurrentStatus(user.status || 'offline');
 
+    let cancelled = false;
+    const uid = Number(user.id);
+
     if (user.isMe) {
-      api.get('/users/me/profile')
+      api
+        .get('/users/me/profile')
         .then(({ data }) => {
+          if (cancelled) return;
           setProfileData(data);
           setCurrentStatus(data.status || 'offline');
         })
-        .catch(() => setProfileData(null));
+        .catch(() => {
+          if (!cancelled) setProfileData(null);
+        });
+    } else if (Number.isFinite(uid) && uid > 0) {
+      api
+        .get(`/users/${uid}`)
+        .then(({ data }) => {
+          if (cancelled) return;
+          setProfileData(data);
+        })
+        .catch(() => {
+          if (!cancelled) setProfileData(null);
+        });
     } else {
       setProfileData(null);
     }
-  }, [user?.id]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, user?.isMe, applyProjectsResponse]);
 
   const handleStatusChange = async (newStatus) => {
     try {
@@ -535,6 +1682,41 @@ function UserPanel({ user, onClose, onViewProfile, onStatusChange, hasNewDm = fa
     });
   };
 
+  const handleFeedPostLike = async (postId, e) => {
+    e?.stopPropagation?.();
+    if (!viewer?.user_id) return;
+    const pid = Number(postId);
+    if (!Number.isFinite(pid) || pid <= 0) return;
+    try {
+      const { liked, likeCount } = await togglePostLike(pid);
+      setUserPosts((prev) =>
+        prev.map((p) => (Number(p.id) === pid ? { ...p, likes: likeCount, isLiked: liked } : p)),
+      );
+      onPostLikeUpdated?.({ postId: pid, liked, likeCount });
+    } catch (err) {
+      const msg = err.response?.data?.message;
+      if (msg) console.warn('[post like]', msg);
+    }
+  };
+
+  const handleTrophyLike = async (trophyId, e) => {
+    if (e) e.stopPropagation();
+    if (!viewer?.user_id) return;
+    try {
+      const { liked, likeCount } = await toggleTrophyLike(trophyId);
+      setTrophyList((prev) => prev.map((t) => (t.trophyId === trophyId ? { ...t, likes: likeCount } : t)));
+      setLikedSet((prev) => {
+        const next = new Set(prev);
+        if (liked) next.add(`t_${trophyId}`);
+        else next.delete(`t_${trophyId}`);
+        return next;
+      });
+    } catch (err) {
+      const msg = err.response?.data?.message;
+      if (msg) console.warn('[trophy like]', msg);
+    }
+  };
+
   const d = user ? {
     id:             user.id,
     name:           profileData?.nickname    ?? user.name,
@@ -544,11 +1726,24 @@ function UserPanel({ user, onClose, onViewProfile, onStatusChange, hasNewDm = fa
     tech_stacks:    profileData?.tech_stacks ?? [],
     coins:          profileData?.coins       ?? 0,
     current_streak: profileData?.current_streak ?? 0,
-    follower_count: profileData?.follower_count ?? 0,
+    follower_count: Number(profileData?.follower_count ?? 0),
     isMe:           user.isMe,
   } : null;
 
+  const streakNameBadge = d ? streakBadgeEmoji(d.current_streak) : '';
+
   const statusInfo = STATUS_CONFIG[currentStatus] || STATUS_CONFIG.offline;
+
+  const visiblePosts = useMemo(() => {
+    if (userPosts.length > 0) return userPosts;
+    const arr = [...DUMMY_POSTS];
+    if (postSort === 'popular') {
+      arr.sort((a, b) => (Number(b.likes) || 0) - (Number(a.likes) || 0));
+    } else {
+      arr.sort((a, b) => (Number(b.id) || 0) - (Number(a.id) || 0));
+    }
+    return arr;
+  }, [userPosts, postSort]);
 
   return (
     <aside
@@ -561,10 +1756,10 @@ function UserPanel({ user, onClose, onViewProfile, onStatusChange, hasNewDm = fa
       {d && (
         <>
           {/* ── 카드 1: 프로필 정보 ── */}
-          <div style={profileCardStyle}>
+          <div style={{ ...profileCardStyle, padding: '11px 12px', flex: '0 0 auto', overflow: 'visible' }}>
 
             {/* 상단 바: DM·알림 아이콘(왼쪽) / 닫기·상태(오른쪽) */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
 
               {/* 왼쪽 아이콘 영역
                   - 내 프로필: DM(새 메시지 표시) + 알림 벨(새 알림 표시)
@@ -591,8 +1786,8 @@ function UserPanel({ user, onClose, onViewProfile, onStatusChange, hasNewDm = fa
                     onClick={d.isMe ? () => setStatusOpen(!statusOpen) : undefined}
                   >
                     <div style={{ width: 10, height: 10, borderRadius: '50%', background: statusInfo.color, flexShrink: 0 }} />
-                    <span style={{ fontSize: '0.85rem', color: '#374151', fontWeight: 600 }}>{statusInfo.label}</span>
-                    {d.isMe && <span style={{ fontSize: '0.65rem', color: '#9ca3af' }}>▾</span>}
+                    <span style={{ fontSize: '0.8rem', color: '#374151', fontWeight: 600 }}>{statusInfo.label}</span>
+                    {d.isMe && <span style={{ fontSize: '0.6rem', color: '#9ca3af' }}>▾</span>}
                   </div>
 
                   {statusOpen && (
@@ -615,18 +1810,18 @@ function UserPanel({ user, onClose, onViewProfile, onStatusChange, hasNewDm = fa
             </div>
 
             {/* 아바타 - 확장 모드에선 60px로 축소 */}
-            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: isExpanded ? 8 : 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: isExpanded ? 4 : 6 }}>
               {d.avatar_url ? (
                 <img src={d.avatar_url} alt={d.name}
                   style={{
-                    width: isExpanded ? 60 : 80, height: isExpanded ? 60 : 80,
+                    width: isExpanded ? 50 : 56, height: isExpanded ? 50 : 56,
                     borderRadius: '50%', objectFit: 'cover',
-                    border: '3px solid rgba(255,255,255,0.9)', boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+                    border: '2px solid rgba(255,255,255,0.9)', boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
                     transition: 'width 0.3s ease, height 0.3s ease',
                   }} />
               ) : (
                 <div style={{
-                  width: isExpanded ? 60 : 80, height: isExpanded ? 60 : 80,
+                  width: isExpanded ? 50 : 56, height: isExpanded ? 50 : 56,
                   borderRadius: '50%', background: d.color,
                   boxShadow: `0 4px 16px ${d.color}88`,
                   transition: 'width 0.3s ease, height 0.3s ease',
@@ -635,76 +1830,75 @@ function UserPanel({ user, onClose, onViewProfile, onStatusChange, hasNewDm = fa
             </div>
 
             {/* 닉네임 */}
-            <div style={{ textAlign: 'center', marginBottom: isExpanded ? 6 : 10 }}>
-              <span style={{ fontSize: isExpanded ? '1.05rem' : '1.25rem', fontWeight: 800, color: '#0f1c36', transition: 'font-size 0.3s ease' }}>{d.name}</span>
+            <div style={{ textAlign: 'center', marginBottom: isExpanded ? 4 : 6 }}>
+              <span style={{ fontSize: isExpanded ? '0.95rem' : '1.02rem', fontWeight: 800, color: '#0f1c36', transition: 'font-size 0.3s ease' }}>{d.name}{streakNameBadge ? ` ${streakNameBadge}` : ''}</span>
             </div>
 
             {/* 기술 스택 칩 - 확장 모드에선 숨김 */}
             {!isExpanded && d.tech_stacks.length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'center', marginBottom: 10 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, justifyContent: 'center', marginBottom: 6 }}>
                 {d.tech_stacks.map(stack => (
-                  <span key={stack} style={techChipStyle}>{stack}</span>
+                  <span key={stack} style={profileTechChipStyle}>{stack}</span>
                 ))}
               </div>
             )}
 
             {/* 자기소개 - 확장 모드에선 숨김 */}
             {!isExpanded && d.bio && (
-              <p style={{ fontSize: '0.88rem', color: '#6b7280', textAlign: 'center', margin: '0 0 10px', lineHeight: 1.5 }}>
+              <p style={{ fontSize: '0.78rem', color: '#6b7280', textAlign: 'center', margin: '0 0 6px', lineHeight: 1.42 }}>
                 {d.bio}
               </p>
             )}
 
             {/* 코인 - 본인만 */}
             {d.isMe && (
-              <p style={{ textAlign: 'center', fontSize: '0.95rem', fontWeight: 700, color: '#d97706', margin: '0 0 16px' }}>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <p style={{ textAlign: 'center', fontSize: '0.78rem', fontWeight: 700, color: '#d97706', margin: '0 0 8px' }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                   보유 코인
-                  <img src="/coin_icon.svg" alt="코인" style={{ width: 18, height: 18 }} />
+                  <img src="/coin_icon.svg" alt="코인" style={{ width: 15, height: 15 }} />
                   {(d.coins).toLocaleString()}
                 </span>
               </p>
             )}
 
-            <hr style={{ border: 'none', borderTop: '1px solid rgba(0,0,0,0.08)', margin: '0 0 16px' }} />
+            <hr style={{ border: 'none', borderTop: '1px solid rgba(0,0,0,0.08)', margin: '0 0 8px' }} />
 
             {/* 통계: 버튼과 3등분 정렬 맞춤 (flex:1로 각 섹션 동일 너비) */}
-            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
               <div style={{ flex: 1, textAlign: 'center' }}>
-                <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#f59e0b' }}>{d.current_streak}</div>
-                <div style={{ fontSize: '0.72rem', color: '#9ca3af', marginTop: 3 }}>커밋 스트릭</div>
+                <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#f59e0b' }}>{d.current_streak}</div>
+                <div style={{ fontSize: '0.62rem', color: '#9ca3af', marginTop: 2 }}>커밋 스트릭</div>
               </div>
-              <div style={{ width: 1, height: 32, background: 'rgba(0,0,0,0.1)', flexShrink: 0 }} />
+              <div style={{ width: 1, height: 22, background: 'rgba(0,0,0,0.1)', flexShrink: 0 }} />
               <div style={{ flex: 1, textAlign: 'center' }}>
-                <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#0f1c36' }}>0</div>
-                <div style={{ fontSize: '0.72rem', color: '#9ca3af', marginTop: 3 }}>프로젝트</div>
+                <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#0f1c36' }}>{trophiesLoad === 'ok' ? trophyList.length : 0}</div>
+                <div style={{ fontSize: '0.62rem', color: '#9ca3af', marginTop: 2 }}>프로젝트</div>
               </div>
-              <div style={{ width: 1, height: 32, background: 'rgba(0,0,0,0.1)', flexShrink: 0 }} />
+              <div style={{ width: 1, height: 22, background: 'rgba(0,0,0,0.1)', flexShrink: 0 }} />
               <div style={{ flex: 1, textAlign: 'center' }}>
-                <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#0f1c36' }}>{d.follower_count}</div>
-                <div style={{ fontSize: '0.72rem', color: '#9ca3af', marginTop: 3 }}>팔로워</div>
+                <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#0f1c36' }}>{d.follower_count}</div>
+                <div style={{ fontSize: '0.62rem', color: '#9ca3af', marginTop: 2 }}>팔로워</div>
               </div>
             </div>
 
             {/* 프로필 수정 / 팔로우 버튼 - 확장 모드에선 숨김 (공간 절약) */}
             {!isExpanded && (
-              <button style={profileActionBtnStyle} onClick={() => onViewProfile(d.id)}>
+              <button style={{ ...profileActionBtnStyle, padding: '9px', fontSize: '0.84rem' }} onClick={() => onViewProfile(d.id)}>
                 {d.isMe ? '프로필 수정' : '팔로우'}
               </button>
             )}
           </div>
 
-          {/* ── 카드 2: 내 글 / 트로피 탭 ── */}
-          {/* 외부 카드: flex column, 패딩 없음 → 헤더와 스크롤 영역을 분리 */}
-          <div style={{ ...profileCardStyle, marginTop: 10, flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, padding: 0, overflow: 'hidden' }}>
+          {/* ── 카드 2: 내 글 / 트로피 (세로 최대 약 72%로 제한) */}
+          <div style={{ ...profileCardStyle, marginTop: 8, flex: '1 1 0', maxHeight: '72%', display: 'flex', flexDirection: 'column', minHeight: 0, padding: 0, overflow: 'hidden' }}>
             {/* 탭 헤더 + 펼치기 토글 버튼 - 고정 (스크롤 안 됨) */}
-            <div style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid rgba(0,0,0,0.08)', padding: '0 20px', flexShrink: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid rgba(0,0,0,0.08)', padding: '0 16px', flexShrink: 0, minHeight: 40 }}>
               {[['posts', '내 글'], ['trophies', '트로피']].map(([key, label]) => (
                 <button key={key}
                   style={{
                     flex: 1, border: 'none', background: 'none',
                     padding: '10px 0', cursor: 'pointer',
-                    fontSize: '0.95rem', fontWeight: activeTab === key ? 700 : 400,
+                    fontSize: '0.9rem', fontWeight: activeTab === key ? 700 : 400,
                     color: activeTab === key ? '#3b82f6' : '#9ca3af',
                     borderBottom: activeTab === key ? '2px solid #3b82f6' : '2px solid transparent',
                     transition: 'color 0.2s',
@@ -729,163 +1923,314 @@ function UserPanel({ user, onClose, onViewProfile, onStatusChange, hasNewDm = fa
             </div>
 
             {/* 스크롤 가능한 콘텐츠 영역 - 탭 헤더는 고정, 이 영역만 스크롤됨 */}
-            <div className="tab-scroll" style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: '0 20px 16px' }}>
+            <div className="tab-scroll" style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: '6px 14px 14px' }}>
 
             {/* 내 글 탭 */}
             {activeTab === 'posts' && (
               <div>
-                {DUMMY_POSTS.map(post => (
-                  <div key={post.id} style={postItemStyle}>
-                    <p style={{ margin: '0 0 10px', fontSize: '0.88rem', color: '#1f2937', lineHeight: 1.5 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', marginBottom: 8 }}>
+                  <label style={{ fontSize: '0.74rem', color: '#6b7280', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span>정렬</span>
+                    <select
+                      value={postSort}
+                      onChange={(e) => setPostSort(e.target.value === 'popular' ? 'popular' : 'latest')}
+                      style={{
+                        padding: '4px 8px',
+                        fontSize: '0.76rem',
+                        borderRadius: 8,
+                        border: '1px solid rgba(0,0,0,0.12)',
+                        background: '#fff',
+                        color: '#0f1c36',
+                      }}
+                    >
+                      <option value="latest">최신순</option>
+                      <option value="popular">인기순</option>
+                    </select>
+                  </label>
+                </div>
+                {visiblePosts.map(post => (
+                  <div
+                    key={post.id}
+                    style={{
+                      ...postItemStyle,
+                      cursor: post.isFeedPost ? 'pointer' : 'default',
+                    }}
+                    role={post.isFeedPost ? 'link' : undefined}
+                    tabIndex={post.isFeedPost ? 0 : undefined}
+                    onClick={() => {
+                      if (!post.isFeedPost) return;
+                      const pid = Number(post.id);
+                      if (!Number.isFinite(pid) || pid <= 0) return;
+                      onOpenFeedPost?.(pid);
+                    }}
+                    onKeyDown={(e) => {
+                      if (!post.isFeedPost) return;
+                      if (e.key !== 'Enter' && e.key !== ' ') return;
+                      e.preventDefault();
+                      const pid = Number(post.id);
+                      if (!Number.isFinite(pid) || pid <= 0) return;
+                      onOpenFeedPost?.(pid);
+                    }}
+                  >
+                    <p style={{ margin: '0 0 6px', fontSize: '0.86rem', color: '#1f2937', lineHeight: 1.45 }}>
                       {post.content}
                     </p>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                      {/* 좋아요 - 누르면 핑크색으로 채워짐 */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginTop: 0 }} onClick={(e) => e.stopPropagation()}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      {/* 좋아요 — 피드와 동일한 채움 하트(빨간색) */}
                       <button
-                        style={{ display: 'flex', alignItems: 'center', gap: 4, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}
-                        onClick={() => toggleLike(post.id)}
+                        type="button"
+                        className="feed-post-like-btn"
+                        data-liked={
+                          (post.isFeedPost ? Boolean(post.isLiked) : likedSet.has(post.id))
+                            ? 'true'
+                            : 'false'
+                        }
+                        disabled={post.isFeedPost && !viewer?.user_id}
+                        aria-label={
+                          (post.isFeedPost ? Boolean(post.isLiked) : likedSet.has(post.id))
+                            ? '좋아요 취소'
+                            : '좋아요'
+                        }
+                        aria-pressed={
+                          post.isFeedPost ? Boolean(post.isLiked) : likedSet.has(post.id)
+                        }
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          border: 'none',
+                          background: 'none',
+                          cursor: post.isFeedPost && !viewer?.user_id ? 'default' : 'pointer',
+                          padding: '2px 0',
+                          opacity: post.isFeedPost && !viewer?.user_id ? 0.5 : 1,
+                          color: (post.isFeedPost ? Boolean(post.isLiked) : likedSet.has(post.id))
+                            ? '#e11d48'
+                            : '#94a3b8',
+                        }}
+                        onClick={(e) => {
+                          if (post.isFeedPost) handleFeedPostLike(post.id, e);
+                          else toggleLike(post.id);
+                        }}
                       >
-                        <img
-                          src="/heart.svg"
-                          alt="좋아요"
-                          style={{
-                            width: 16, height: 16,
-                            filter: likedSet.has(post.id)
-                              ? 'invert(53%) sepia(90%) saturate(500%) hue-rotate(290deg) brightness(1.1)'
-                              : 'none',
-                          }}
-                        />
-                        <span style={{ fontSize: '0.8rem', color: likedSet.has(post.id) ? '#ec4899' : '#9ca3af' }}>
-                          {post.likes + (likedSet.has(post.id) ? 1 : 0)}
+                        <span style={{ display: 'inline-flex', transform: 'scale(0.88)', transformOrigin: 'center' }}>
+                          <HeartIcon
+                            filled={
+                              post.isFeedPost ? Boolean(post.isLiked) : likedSet.has(post.id)
+                            }
+                          />
+                        </span>
+                        <span style={{ fontSize: '0.76rem', fontWeight: 600 }}>
+                          {post.isFeedPost ? post.likes : post.likes + (likedSet.has(post.id) ? 1 : 0)}
                         </span>
                       </button>
                       {/* 댓글 */}
                       <button
-                        style={{ display: 'flex', alignItems: 'center', gap: 4, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}
+                        type="button"
+                        style={{ display: 'flex', alignItems: 'center', gap: 3, border: 'none', background: 'none', cursor: 'pointer', padding: '2px 0' }}
                       >
-                        <img src="/message_icon.svg" alt="댓글" style={{ width: 16, height: 16, opacity: 0.5 }} />
-                        <span style={{ fontSize: '0.8rem', color: '#9ca3af' }}>{post.comments}</span>
+                        <img src="/message_icon.svg" alt="댓글" style={{ width: 15, height: 15, opacity: 0.5 }} />
+                        <span style={{ fontSize: '0.76rem', color: '#9ca3af' }}>{post.comments}</span>
                       </button>
-                      <span style={{ marginLeft: 'auto', fontSize: '0.75rem', color: '#9ca3af' }}>{post.timeAgo}</span>
+                      </div>
+                      <span style={{ fontSize: '0.72rem', color: '#9ca3af', flexShrink: 0 }}>{post.timeAgo}</span>
                     </div>
                   </div>
                 ))}
+                <button
+                  type="button"
+                  style={{ ...showMoreBtnStyle, marginTop: 8 }}
+                  onClick={() => onViewMorePosts?.(String(d?.name ?? '').trim())}
+                >
+                  더보기 →
+                </button>
               </div>
             )}
 
-            {/* 트로피 탭 */}
+            {/* 트로피 탭 — 서버 프로젝트 목록 */}
             {activeTab === 'trophies' && (
               <div>
-                {DUMMY_TROPHIES.map(trophy => (
-                  isExpanded ? (
-                    /* 확장 모드 - 프로젝트 상세 카드 */
-                    <div key={trophy.id} style={projectCardStyle}>
-                      {/* 왼쪽: 더 큰 프로젝트 썸네일 */}
-                      <div style={projectThumbStyle}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                    marginBottom: 10,
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#374151' }}>
+                    총 {trophiesLoad === 'ok' ? trophyList.length : 0}개의 프로젝트
+                  </span>
+                  <label style={{ fontSize: '0.74rem', color: '#6b7280', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span>정렬</span>
+                    <select
+                      value={trophySort}
+                      onChange={(e) => setTrophySort(e.target.value === 'popular' ? 'popular' : 'latest')}
+                      style={{
+                        padding: '4px 8px',
+                        fontSize: '0.76rem',
+                        borderRadius: 8,
+                        border: '1px solid rgba(0,0,0,0.12)',
+                        background: '#fff',
+                        color: '#0f1c36',
+                      }}
+                    >
+                      <option value="latest">최신순</option>
+                      <option value="popular">인기순</option>
+                    </select>
+                  </label>
+                </div>
+                {trophiesLoad === 'loading' && (
+                  <p style={{ fontSize: '0.82rem', color: '#9ca3af', padding: '8px 0' }}>불러오는 중…</p>
+                )}
+                {trophiesLoad === 'error' && (
+                  <p style={{ fontSize: '0.82rem', color: '#f87171', padding: '8px 0' }}>목록을 불러오지 못했습니다.</p>
+                )}
+                {trophiesLoad === 'ok' && trophyList.length === 0 && (
+                  <p style={{ fontSize: '0.82rem', color: '#9ca3af', padding: '8px 0' }}>등록된 프로젝트가 없습니다.</p>
+                )}
+                {trophiesLoad === 'ok' &&
+                  trophyList.map((trophy) => (
+                    <div
+                      key={trophy.id}
+                      role="button"
+                      tabIndex={0}
+                      style={trophyFeedCardStyle}
+                      onClick={() =>
+                        onOpenProject?.({
+                          ...trophy,
+                          liked: likedSet.has(`t_${trophy.trophyId}`),
+                          ownerProfile: {
+                            nickname: d.name,
+                            avatar_url: d.avatar_url,
+                            bio: d.bio,
+                            isOwnerMe: d.isMe,
+                          },
+                        })
+                      }
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter' && e.key !== ' ') return;
+                        e.preventDefault();
+                        onOpenProject?.({
+                          ...trophy,
+                          liked: likedSet.has(`t_${trophy.trophyId}`),
+                          ownerProfile: {
+                            nickname: d.name,
+                            avatar_url: d.avatar_url,
+                            bio: d.bio,
+                            isOwnerMe: d.isMe,
+                          },
+                        });
+                      }}
+                    >
+                      <div style={trophyFeedCardThumbWrap}>
                         {trophy.image ? (
-                          <img src={trophy.image} alt={trophy.title}
-                            style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 8 }} />
+                          <img src={trophy.image} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                         ) : (
-                          <div style={{ width: '100%', height: '100%', background: '#e5e7eb', borderRadius: 8,
-                            display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2rem' }}>
+                          <div
+                            style={{
+                              width: '100%',
+                              height: '100%',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              color: '#94a3b8',
+                              fontSize: '1.25rem',
+                            }}
+                            aria-hidden
+                          >
                             📁
                           </div>
                         )}
                       </div>
-
-                      {/* 가운데: 제목·설명·기술스택·기간+좋아요댓글 */}
                       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        {/* 제목 */}
-                        <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#0f1c36',
-                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <span
+                          style={{
+                            fontWeight: 700,
+                            fontSize: '0.88rem',
+                            color: '#0f1c36',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
                           {trophy.title}
                         </span>
-
-                        {/* 설명 - 2줄 초과 시 ... */}
-                        <p style={{
-                          margin: 0, fontSize: '0.75rem', color: '#6b7280', lineHeight: 1.4,
-                          overflow: 'hidden', display: '-webkit-box',
-                          WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
-                        }}>
+                        <p
+                          style={{
+                            margin: 0,
+                            fontSize: '0.78rem',
+                            color: '#64748b',
+                            lineHeight: 1.45,
+                            overflow: 'hidden',
+                            display: '-webkit-box',
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: 'vertical',
+                          }}
+                        >
                           {trophy.desc}
                         </p>
-
-                        {/* 기술 스택 - 작게, 2개까지 표시 후 ... */}
-                        <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 2, overflow: 'hidden', alignItems: 'center' }}>
-                          {trophy.techStacks.slice(0, 2).map(t => (
-                            <span key={t} style={{
-                              ...techChipStyle, fontSize: '0.58rem', padding: '1px 6px',
-                              flexShrink: 0, maxWidth: 64,
-                              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                            }}>{t}</span>
-                          ))}
-                          {trophy.techStacks.length > 2 && (
-                            <span style={{ fontSize: '0.58rem', color: '#9ca3af', flexShrink: 0 }}>...</span>
-                          )}
-                        </div>
-
-                        {/* 프로젝트 기간 - 단독 한 줄 */}
-                        <span style={{ fontSize: '0.62rem', color: '#9ca3af', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {trophy.dateRange}
-                        </span>
-                      </div>
-
-                      {/* 우측: 경과시간 → 트로피 아이콘 → 좋아요·댓글 */}
-                      <div style={{ width: 64, flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
-                        {/* 경과시간 - 트로피 위 */}
-                        <span style={{ fontSize: '0.58rem', color: '#9ca3af' }}>{trophy.timeAgo}</span>
-                        {/* 트로피 아이콘 */}
-                        {TROPHY_GRADE[trophy.grade] && (
-                          <img src={TROPHY_GRADE[trophy.grade].src} alt={trophy.grade}
-                            style={{ width: 60, height: 'auto', objectFit: 'contain', marginTop: 10, marginRight: 11 }} />
-                        )}
-                        {/* 좋아요·댓글 - 트로피 아래 */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
-                          <button
-                            style={{ display: 'flex', alignItems: 'center', gap: 2, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}
-                            onClick={() => toggleLike('t_' + trophy.id)}
-                          >
-                            <img src="/heart.svg" alt="좋아요" style={{
-                              width: 11, height: 11,
-                              filter: likedSet.has('t_' + trophy.id)
-                                ? 'invert(53%) sepia(90%) saturate(500%) hue-rotate(290deg) brightness(1.1)'
-                                : 'none',
-                            }} />
-                            <span style={{ fontSize: '0.62rem', color: likedSet.has('t_' + trophy.id) ? '#ec4899' : '#9ca3af' }}>
-                              {trophy.likes + (likedSet.has('t_' + trophy.id) ? 1 : 0)}
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+                          {trophy.techStacks.slice(0, 4).map((tag) => (
+                            <span key={tag} style={{ ...techChipStyle, fontSize: '0.62rem', padding: '2px 6px' }}>
+                              {tag}
                             </span>
-                          </button>
+                          ))}
+                          {trophy.techStacks.length > 4 ? (
+                            <span style={{ fontSize: '0.62rem', color: '#94a3b8' }}>+{trophy.techStacks.length - 4}</span>
+                          ) : null}
+                        </div>
+                        <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>{trophy.dateRange}</span>
+                      </div>
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'flex-end',
+                          justifyContent: 'space-between',
+                          flexShrink: 0,
+                          minHeight: 88,
+                          width: 56,
+                        }}
+                      >
+                        {TROPHY_GRADE[trophy.grade] ? (
+                          <img
+                            src={TROPHY_GRADE[trophy.grade].src}
+                            alt=""
+                            style={{ width: 44, height: 'auto', objectFit: 'contain' }}
+                          />
+                        ) : (
+                          <span style={{ fontSize: '1.5rem' }} aria-hidden>
+                            🏆
+                          </span>
+                        )}
+                        <div
+                          style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => e.stopPropagation()}
+                          role="presentation"
+                        >
                           <button
-                            style={{ display: 'flex', alignItems: 'center', gap: 2, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}
+                            type="button"
+                            className="feed-post-like-btn"
+                            data-liked={likedSet.has(`t_${trophy.trophyId}`) ? 'true' : 'false'}
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: '0.68rem' }}
+                            onClick={(e) => handleTrophyLike(trophy.trophyId, e)}
+                            disabled={!viewer?.user_id}
+                            aria-label="좋아요"
                           >
-                            <img src="/message_icon.svg" alt="댓글" style={{ width: 11, height: 11, opacity: 0.5 }} />
-                            <span style={{ fontSize: '0.62rem', color: '#9ca3af' }}>{trophy.comments ?? 0}</span>
+                            <HeartIcon filled={likedSet.has(`t_${trophy.trophyId}`)} />
+                            <span>{trophy.likes}</span>
                           </button>
+                          <span className="feed-post-meta" style={{ fontSize: '0.62rem', display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                            💬 {trophy.comments ?? 0}
+                          </span>
                         </div>
                       </div>
                     </div>
-                  ) : (
-                    /* 기본 모드 - 간략 표시 */
-                    <div key={trophy.id} style={{ ...trophyItemStyle, position: 'relative', alignItems: 'flex-start' }}>
-                      {/* 트로피 아이콘 */}
-                      {TROPHY_GRADE[trophy.grade] ? (
-                        <img src={TROPHY_GRADE[trophy.grade].src} alt={trophy.grade}
-                          style={{ width: 128, height: 'auto', flexShrink: 0, objectFit: 'contain', marginLeft: -90, marginTop: -10 }} />
-                      ) : (
-                        <span style={{ fontSize: '2.5rem', flexShrink: 0 }}>🏆</span>
-                      )}
-                      {/* 제목·설명 */}
-                      <div style={{ flex: 1, minWidth: 0, paddingRight: 44 }}>
-                        <div style={{ fontSize: '1.35rem', fontWeight: 700, color: '#92400e' }}>{trophy.title}</div>
-                        <div style={{ fontSize: '0.78rem', color: '#9ca3af', marginTop: 2 }}>{trophy.desc}</div>
-                      </div>
-                      {/* 경과시간 - 우측 상단 끝, 내 글과 동일 스타일 */}
-                      <span style={{ position: 'absolute', top: 12, right: 0, fontSize: '0.75rem', color: '#9ca3af' }}>
-                        {trophy.timeAgo}
-                      </span>
-                    </div>
-                  )
-                ))}
+                  ))}
               </div>
             )}
 
@@ -1000,13 +2345,13 @@ const earthNavbarStyle = {
 // 메뉴 항목 목록 - 랜딩 페이지와 동일
 const navItems = ['프로필', '피드', '트로피', '상점', '로그아웃'];
 
-// 패널 전체 컨테이너 - flex column: 프로필 카드 고정 + 탭 카드가 나머지 공간 차지
+// 패널 전체 컨테이너 - flex column: 프로필 카드 + 탭 카드 (하단 여백 넉넉히 → 화면에서 위로)
 const panelStyle = {
   position: "absolute",
-  top: 90,
-  right: 16,
-  bottom: 16,
-  width: 360,
+  top: 78,
+  right: 14,
+  bottom: 104,
+  width: 384,
   display: "flex",
   flexDirection: "column",
   overflowX: "hidden",
@@ -1061,6 +2406,17 @@ const iconImgStyle = {
   objectFit: "contain",
 };
 
+// 프로필 카드 안 기술 스택 칩 (트로피 탭과 구분 — 작게)
+const profileTechChipStyle = {
+  background: "rgba(59, 130, 246, 0.1)",
+  border: "1px solid rgba(59, 130, 246, 0.28)",
+  color: "#3b82f6",
+  padding: "1px 5px",
+  borderRadius: 10,
+  fontSize: "0.62rem",
+  fontWeight: 500,
+};
+
 // 기술 스택 칩
 const techChipStyle = {
   background: "rgba(59, 130, 246, 0.1)",
@@ -1101,16 +2457,16 @@ const statusOptionStyle = {
 
 // 글 아이템
 const postItemStyle = {
-  padding: "12px 0",
-  borderBottom: "1px solid rgba(0,0,0,0.06)",
+  padding: "10px 0",
+  borderBottom: "1px solid rgba(0,0,0,0.08)",
 };
 
 // 트로피 아이템
 const trophyItemStyle = {
   display: "flex",
   alignItems: "center",
-  gap: 12,
-  padding: "12px 0",
+  gap: 10,
+  padding: "10px 0",
   borderBottom: "1px solid rgba(0,0,0,0.06)",
 };
 
@@ -1145,7 +2501,7 @@ const showMoreBtnStyle = {
 const projectCardStyle = {
   display: "flex",
   gap: 8,
-  padding: "10px 0",
+  padding: "8px 0",
   borderBottom: "1px solid rgba(0,0,0,0.06)",
   alignItems: "flex-start",
 };
@@ -1163,9 +2519,9 @@ const projectThumbStyle = {
 const labelStyle = {
   background: "rgba(0,0,0,0.78)",
   color: "white",
-  padding: "6px 12px",
+  padding: "7px 14px",
   borderRadius: 999,
-  fontSize: 12,
+  fontSize: 13,
   whiteSpace: "nowrap",
   transform: "translateY(14px)",
 };

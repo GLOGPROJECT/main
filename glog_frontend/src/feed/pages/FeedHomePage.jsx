@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Link, useOutletContext } from 'react-router-dom';
+import { useOutletContext } from 'react-router-dom';
 import { useAuth } from '../../auth/hooks/useAuth';
+import { API_ORIGIN } from '../../api/axios';
 import FeedTabs from '../components/FeedTabs';
 import FeedSortAndTheme from '../components/FeedSortAndTheme';
 import FeedList from '../components/FeedList';
@@ -29,7 +30,13 @@ export default function FeedHomePage() {
       </div>
       {user ? (
         <div className="feed-card feed-composer">
-          <div className="feed-avatar feed-avatar-sm" aria-hidden />
+          {user?.avatar_url ? (
+            <div className="feed-avatar feed-avatar-sm feed-avatar-img" aria-hidden>
+              <img src={user.avatar_url} alt="" width={36} height={36} decoding="async" />
+            </div>
+          ) : (
+            <div className="feed-avatar feed-avatar-sm" aria-hidden />
+          )}
           <div className="feed-input-area">
             <textarea placeholder="무슨 작업 중인가요?" readOnly onFocus={() => setComposeOpen()} onClick={() => setComposeOpen()} />
             <div className="feed-composer-actions">
@@ -59,9 +66,14 @@ export default function FeedHomePage() {
           <p className="feed-post-meta" style={{ marginTop: '0.4rem' }}>
             GitHub 계정으로 로그인 후 본문/이미지/코드 블록을 작성하세요.
           </p>
-          <Link to="/" className="feed-btn-primary" style={{ display: 'inline-block', marginTop: '0.65rem', textDecoration: 'none' }}>
+          <button
+            type="button"
+            className="feed-btn-primary"
+            style={{ display: 'inline-block', marginTop: '0.65rem' }}
+            onClick={() => window.location.assign(`${API_ORIGIN}/api/auth/github`)}
+          >
             GitHub으로 로그인
-          </Link>
+          </button>
         </div>
       )}
       <FeedList feedType="all" sortOrder={sortOrder} prependPosts={prependPosts} />

@@ -25,18 +25,23 @@ export function addDeletedPostId(postId) {
   }
 }
 
-function synthPadComments(postId, n) {
-  const out = [];
-  for (let i = 0; i < n; i += 1) {
-    out.push({
-      id: `s-${postId}-${i}`,
-      author: ['reader1', 'dev_bot', 'guest_user'][i % 3],
-      body: `목 무한스크롤 댓글 #${i + 1}`,
-      is_deleted: false,
-      createdAt: `2026-05-${String((i % 27) + 1).padStart(2, '0')} 14:${String(i % 60).padStart(2, '0')}`,
-    });
-  }
-  return out;
+function buildDefaultCommentList(postId) {
+  const seed = (MOCK_COMMENTS_BY_POST[postId] ?? []).map((c, idx) => ({
+    ...c,
+    createdAt: c.createdAt ?? `2026-04-${String(10 + idx).padStart(2, '0')} 09:30`,
+  }));
+  return [...seed];
+}
+
+function stripLegacyMockComments(list) {
+  if (!Array.isArray(list)) return [];
+  return list.filter((c) => {
+    if (!c) return false;
+    if (String(c.id).startsWith('s-')) return false;
+    if (String(c.body || '').includes('목 무한스크롤 댓글')) return false;
+    if (['reader1', 'dev_bot', 'guest_user'].includes(c.author)) return false;
+    return true;
+  });
 }
 
 /**
@@ -69,15 +74,6 @@ function resolveSyntheticAllFeedPost(id) {
   };
 }
 
-function buildDefaultCommentList(postId) {
-  const seed = (MOCK_COMMENTS_BY_POST[postId] ?? []).map((c, idx) => ({
-    ...c,
-    createdAt: c.createdAt ?? `2026-04-${String(10 + idx).padStart(2, '0')} 09:30`,
-  }));
-  const pad = postId === '1' || postId === '2' ? synthPadComments(postId, 22) : [];
-  return [...seed, ...pad];
-}
-
 export function getCommentListForPost(postId) {
   const threadId = getCommentThreadPostId(postId);
   const key = SS_COMMENTS_PREFIX + threadId;
@@ -85,7 +81,7 @@ export function getCommentListForPost(postId) {
     const raw = sessionStorage.getItem(key);
     if (raw) {
       const arr = JSON.parse(raw);
-      if (Array.isArray(arr)) return arr;
+      if (Array.isArray(arr)) return stripLegacyMockComments(arr);
     }
   } catch {
     /* ignore */

@@ -1,11 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import api from '../../api/axios';
+import api, { API_ORIGIN } from '../../api/axios';
 import GlobalTopNav from '../../components/GlobalTopNav';
-
-// 백엔드 서버 주소 - GitHub OAuth 로그인 요청을 이 주소로 보냄
-const BACKEND_URL = 'http://localhost:4000';
 
 // 전역 CSS:
 // - earth-spin: 지구본 무한 회전 (20초 1바퀴)
@@ -79,7 +76,11 @@ export default function Landing() {
     const params = new URLSearchParams(window.location.search);
     const error = params.get('error');
     if (error === 'access_denied') alert('GitHub 권한 동의가 거부되었습니다.');
-    else if (error === 'server_error') alert('GitHub 서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+    else if (error === 'db_migration_required') {
+      alert(
+        'DB 스키마가 최신이 아닙니다. 백엔드에서 prisma/sql/add_daily_contribution_coin.sql 적용(또는 npx prisma db push) 후 다시 로그인해 주세요.',
+      );
+    } else if (error === 'server_error') alert('GitHub 서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
     if (error) window.history.replaceState({}, '', '/');
   }, []);
 
@@ -91,9 +92,8 @@ export default function Landing() {
       .catch(() => {});
   }, []);
 
-  // 지금 시작하기 버튼 클릭 시 GitHub OAuth 인증 페이지로 이동
   function handleGithubLogin() {
-    window.location.href = `${BACKEND_URL}/api/auth/github`;
+    window.location.href = `${API_ORIGIN}/api/auth/github`;
   }
 
   // 로딩 중에는 배경색만 채운 빈 화면 (깜빡임 방지)

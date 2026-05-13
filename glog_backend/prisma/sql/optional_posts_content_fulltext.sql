@@ -1,0 +1,3 @@
+-- 선택: 통합 검색 FULLTEXT 경로 사용 시 실행 (MySQL 8+)
+-- 이미 인덱스가 있으면 생략. 없으면 검색은 LIKE fallback만 사용합니다.
+-- ALTER TABLE posts ADD FULLTEXT INDEX idx_posts_content_ft (content);
