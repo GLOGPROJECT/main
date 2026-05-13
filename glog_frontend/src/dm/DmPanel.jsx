@@ -2,6 +2,13 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../api/axios';
 import { useAuth } from '../auth/hooks/useAuth';
 
+// http로 시작하는 S3 URL만 사용, 로컬 경로는 null 처리 (배포 환경에서 로컬 파일 접근 불가)
+function resolveFileUrl(url) {
+  if (!url) return null;
+  if (url.startsWith('http')) return url;
+  return null;
+}
+
 function formatDateLabel(dateStr) {
   const d = new Date(dateStr);
   return `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일`;
@@ -44,9 +51,12 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId, sendMessage
   const [miniDropdown, setMiniDropdown] = useState(false);
   // 드래그 위치 (null이면 기본 중앙)
   const [pos, setPos] = useState(null);
+  // 최소화 창 드래그 위치 (null이면 기본 왼쪽 하단)
+  const [miniPos, setMiniPos] = useState(null);
   const dragging = useRef(false);
   const dragOffset = useRef({ x: 0, y: 0 });
   const panelRef = useRef(null);
+  const miniPanelRef = useRef(null);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
   const miniInputRef = useRef(null);
@@ -226,6 +236,9 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId, sendMessage
   };
 
   // ── 드래그 ──
+  // 최소화 여부에 따라 큰 창 pos 또는 미니 창 miniPos를 업데이트
+  const miniDragging = useRef(false);
+
   const onMouseDown = (e) => {
     if (minimized) return;
     dragging.current = true;
@@ -234,12 +247,26 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId, sendMessage
     e.preventDefault();
   };
 
+  const onMiniMouseDown = (e) => {
+    miniDragging.current = true;
+    const rect = miniPanelRef.current.getBoundingClientRect();
+    dragOffset.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    e.preventDefault();
+  };
+
   useEffect(() => {
     const onMouseMove = (e) => {
-      if (!dragging.current) return;
-      setPos({ x: e.clientX - dragOffset.current.x, y: e.clientY - dragOffset.current.y });
+      if (dragging.current) {
+        setPos({ x: e.clientX - dragOffset.current.x, y: e.clientY - dragOffset.current.y });
+      }
+      if (miniDragging.current) {
+        setMiniPos({ x: e.clientX - dragOffset.current.x, y: e.clientY - dragOffset.current.y });
+      }
     };
-    const onMouseUp = () => { dragging.current = false; };
+    const onMouseUp = () => {
+      dragging.current = false;
+      miniDragging.current = false;
+    };
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
     return () => {
@@ -270,22 +297,28 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId, sendMessage
     ? { position: 'fixed', left: pos.x, top: pos.y, transform: 'none' }
     : { position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -44%)' };
 
+  // 최소화 창 위치 스타일 — miniPos가 있으면 드래그 위치, 없으면 기본 왼쪽 하단
+  const miniPosStyle = miniPos
+    ? { position: 'fixed', left: miniPos.x, top: miniPos.y, bottom: 'auto' }
+    : { position: 'fixed', bottom: 24, left: 24 };
+
   // ── 최소화 상태 — 왼쪽 하단 작은 채팅창 ──
   if (minimized) {
     return (
-      <div style={s.miniPanel}>
-        {/* 헤더 — 닉네임 클릭 시 방 목록 드롭다운 */}
-        <div style={s.miniHeader}>
+      <div ref={miniPanelRef} style={{ ...s.miniPanel, ...miniPosStyle }}>
+        {/* 헤더 — 드래그 가능, 닉네임 클릭 시 방 목록 드롭다운 */}
+        <div style={{ ...s.miniHeader, cursor: 'grab' }} onMouseDown={onMiniMouseDown}>
           {activeRoom && <img src={activeRoom.partner.avatar_url || '/default-avatar.png'} alt="" style={s.miniAvatar} />}
           <button
             style={s.miniTitleBtn}
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={() => setMiniDropdown((v) => !v)}
             title="대화 상대 변경"
           >
             {activeRoom ? activeRoom.partner.nickname : '메시지'} {miniDropdown ? '▲' : '▼'}
           </button>
-          <button style={s.miniBtn} onClick={() => setMinimized(false)} title="원래 크기로">⤢</button>
-          <button style={s.miniBtn} onClick={onClose} title="닫기">✕</button>
+          <button style={s.miniBtn} onMouseDown={(e) => e.stopPropagation()} onClick={() => setMinimized(false)} title="원래 크기로">⤢</button>
+          <button style={s.miniBtn} onMouseDown={(e) => e.stopPropagation()} onClick={onClose} title="닫기">✕</button>
         </div>
 
         {/* 드롭다운 방 목록 */}
@@ -322,17 +355,17 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId, sendMessage
               <div key={item.id} style={{ ...s.miniMsgRow, justifyContent: isMine ? 'flex-end' : 'flex-start' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: isMine ? 'flex-end' : 'flex-start' }}>
                   <div style={isMine ? s.miniBubbleMine : s.miniBubbleOther}>
-                    {item.file_url && item.file_type === 'image' && (
+                    {resolveFileUrl(item.file_url) && item.file_type === 'image' && (
                       <img
-                        src={`http://localhost:4000${item.file_url}`}
+                        src={resolveFileUrl(item.file_url)}
                         alt="첨부 이미지"
                         style={{ maxWidth: 160, maxHeight: 160, borderRadius: 6, display: 'block', cursor: 'pointer' }}
-                        onClick={() => window.open(`http://localhost:4000${item.file_url}`, '_blank')}
+                        onClick={() => window.open(resolveFileUrl(item.file_url), '_blank')}
                       />
                     )}
-                    {item.file_url && item.file_type === 'file' && (
+                    {resolveFileUrl(item.file_url) && item.file_type === 'file' && (
                       <a
-                        href={`http://localhost:4000${item.file_url}`}
+                        href={resolveFileUrl(item.file_url)}
                         target="_blank"
                         rel="noreferrer"
                         style={{ color: isMine ? '#fff' : '#2563eb', fontSize: '0.72rem', wordBreak: 'break-all' }}
@@ -481,18 +514,18 @@ export default function DmPanel({ isOpen, onClose, initialPartnerId, sendMessage
                       <div style={s.msgGroup}>
                         <div style={isMine ? s.bubbleMine : s.bubbleOther}>
                           {/* 이미지 파일 */}
-                          {item.file_url && item.file_type === 'image' && (
+                          {resolveFileUrl(item.file_url) && item.file_type === 'image' && (
                             <img
-                              src={`http://localhost:4000${item.file_url}`}
+                              src={resolveFileUrl(item.file_url)}
                               alt="첨부 이미지"
                               style={{ maxWidth: 220, maxHeight: 220, borderRadius: 8, display: 'block', cursor: 'pointer' }}
-                              onClick={() => window.open(`http://localhost:4000${item.file_url}`, '_blank')}
+                              onClick={() => window.open(resolveFileUrl(item.file_url), '_blank')}
                             />
                           )}
                           {/* 일반 파일 */}
-                          {item.file_url && item.file_type === 'file' && (
+                          {resolveFileUrl(item.file_url) && item.file_type === 'file' && (
                             <a
-                              href={`http://localhost:4000${item.file_url}`}
+                              href={resolveFileUrl(item.file_url)}
                               target="_blank"
                               rel="noreferrer"
                               style={{ color: isMine ? '#fff' : '#2563eb', fontSize: '0.82rem', wordBreak: 'break-all' }}
@@ -569,9 +602,6 @@ const s = {
     userSelect: 'none',
   },
   miniPanel: {
-    position: 'fixed',
-    bottom: 24,
-    left: 24,
     width: 280,
     height: 360,
     background: '#fff',

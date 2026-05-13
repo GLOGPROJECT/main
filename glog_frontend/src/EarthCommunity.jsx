@@ -556,6 +556,11 @@ export default function EarthCommunity() {
   // 랜딩 페이지와 동일한 상단 메뉴 active 상태
   const [activeNav, setActiveNav] = useState(null);
   const [hasNewDm, setHasNewDm] = useState(false);
+  // DM 아이콘 드래그 위치 (null이면 기본 위치)
+  const [dmIconPos, setDmIconPos] = useState(null);
+  const dmIconDragging = useRef(false);
+  const dmIconDragOffset = useRef({ x: 0, y: 0 });
+  const dmIconHasDragged = useRef(false);
   const [hasNewNotif, setHasNewNotif] = useState(false);
   const [dmOpen, setDmOpen] = useState(false);
   const [dmPartnerId, setDmPartnerId] = useState(null);
@@ -812,6 +817,11 @@ export default function EarthCommunity() {
     // API 결과에 내가 없으면 직접 추가 (id는 숫자/문자열 모두 대응)
     const hasMe = normalized.some((u) => Number(u.id) === Number(me.user_id));
     if (hasMe) return normalized;
+    const hasMe = apiGlobeUsers.some((u) => Number(u.id) === Number(me.user_id));
+    // 내가 이미 있어도 isMe: true가 없으므로 내 항목에 플래그 추가
+    if (hasMe) return apiGlobeUsers.map((u) =>
+      Number(u.id) === Number(me.user_id) ? { ...u, isMe: true } : u
+    );
     const lat = parseGlobeCoord(me.globe_lat, 37.56);
     const lon = parseGlobeCoord(me.globe_lon, 126.97);
     // globe_lat/lon이 없으면 지구본에 표시하지 않음
@@ -1270,6 +1280,25 @@ export default function EarthCommunity() {
     return () => window.removeEventListener("pointerup", handlePointerUp);
   }, []);
 
+  // DM 아이콘 드래그
+  useEffect(() => {
+    const onMouseMove = (e) => {
+      if (!dmIconDragging.current) return;
+      dmIconHasDragged.current = true;
+      setDmIconPos({
+        x: e.clientX - dmIconDragOffset.current.x,
+        y: e.clientY - dmIconDragOffset.current.y,
+      });
+    };
+    const onMouseUp = () => { dmIconDragging.current = false; };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, []);
+
   // 마우스 휠로 지구 확대/축소 (프로필/마커 선택 시 하한을 올려 카메라가 지구를 뚫지 않게)
   const handleWheel = (e) => {
     e.preventDefault();
@@ -1475,6 +1504,49 @@ export default function EarthCommunity() {
           ))}
         </div>
       </nav>
+
+      {/* DM 아이콘 — 메뉴바 바로 아래 오른쪽, 프로필 패널 열리면 숨김, 드래그로 위치 변경 가능 */}
+      {!selectedUser && (
+        <button
+          title="메시지"
+          onMouseDown={(e) => {
+            dmIconDragging.current = true;
+            dmIconHasDragged.current = false;
+            const rect = e.currentTarget.getBoundingClientRect();
+            dmIconDragOffset.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+            e.preventDefault();
+          }}
+          onClick={() => { if (!dmIconHasDragged.current) setDmOpen(true); }}
+          style={{
+            position: 'fixed',
+            ...(dmIconPos
+              ? { left: dmIconPos.x, top: dmIconPos.y }
+              : { top: 99, right: 32 }),
+            width: 44,
+            height: 44,
+            borderRadius: '50%',
+            background: 'rgba(78,154,241,0.85)',
+            backdropFilter: 'blur(8px)',
+            border: '2px solid rgba(255,255,255,0.6)',
+            cursor: 'grab',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+          }}
+        >
+          <img src="/dm_icon.svg" alt="DM" style={{ width: 22, height: 22, filter: 'brightness(0) invert(1)', pointerEvents: 'none' }} />
+          {hasNewDm && (
+            <span style={{
+              position: 'absolute', top: 4, right: 4,
+              width: 8, height: 8,
+              background: '#ef4444', borderRadius: '50%',
+              pointerEvents: 'none',
+            }} />
+          )}
+        </button>
+      )}
 
       {/* 펫 상점 모달 */}
       {showShop && (
