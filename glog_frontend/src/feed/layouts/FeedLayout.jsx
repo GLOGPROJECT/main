@@ -4,7 +4,6 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/hooks/useAuth';
 import api from '../../api/axios';
 import { getAppSocket } from '../../realtime/appSocket';
-import { useFeedTheme } from '../theme/ThemeContext';
 import ComposeModal from '../components/ComposeModal';
 import PopularHashtagsSidebar from '../components/PopularHashtagsSidebar';
 import TrendingDevelopersSidebar from '../components/TrendingDevelopersSidebar';
@@ -19,8 +18,7 @@ import { getTagPillColors, getTagPillLabelCapitalized } from '../utils/tagPillCo
 import WeeklyActivityCard from '../components/WeeklyActivityCard';
 import { streakBadgeEmoji } from '../../utils/streakBadgeEmoji';
 import { countTrophiesByGrade } from '../../utils/trophyGradeCounts';
-
-const TAG_SUBS_LS_KEY = 'glog:hashtag-subscribe-v1';
+import { readSubscribedTagSlugs } from '../utils/tagSubscribeStorage';
 
 const FEED_SIDEBAR_TECH_CHIP = {
   background: 'rgba(59, 130, 246, 0.1)',
@@ -38,24 +36,14 @@ const TROPHY_GRADE_ROW = {
   bronze: { src: '/bronzetrophy.svg' },
 };
 
-function readSubscribedTagSlugsFromStorage() {
-  try {
-    const raw = localStorage.getItem(TAG_SUBS_LS_KEY);
-    const arr = raw ? JSON.parse(raw) : [];
-    return Array.isArray(arr) ? arr.map((s) => String(s)) : [];
-  } catch {
-    return [];
-  }
-}
-
 function FeedLayoutInner() {
   const { user, logout } = useAuth();
+  const uid = user?.user_id;
   const navigate = useNavigate();
   const location = useLocation();
   const feedAppRef = useRef(null);
   const initialFeedRouteStateRef = useRef(location.state);
   const qc = useQueryClient();
-  const { theme, toggleTheme } = useFeedTheme();
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeEditPost, setComposeEditPost] = useState(null);
   const [composeInitialAction, setComposeInitialAction] = useState(null);
@@ -70,17 +58,18 @@ function FeedLayoutInner() {
   const statusColor = statusRaw === 'online' ? '#22c55e' : statusRaw === 'away' ? '#eab308' : '#ef4444';
   const sidebarStreakBadge = streakBadgeEmoji(myProfile?.current_streak ?? user?.current_streak ?? 0);
 
-  const [subscribedTags, setSubscribedTags] = useState(() => readSubscribedTagSlugsFromStorage());
+  const [subscribedTags, setSubscribedTags] = useState(() => readSubscribedTagSlugs(uid));
 
   useEffect(() => {
-    const sync = () => setSubscribedTags(readSubscribedTagSlugsFromStorage());
+    setSubscribedTags(readSubscribedTagSlugs(uid));
+    const sync = () => setSubscribedTags(readSubscribedTagSlugs(uid));
     window.addEventListener('glog:tag-subs-changed', sync);
     window.addEventListener('storage', sync);
     return () => {
       window.removeEventListener('glog:tag-subs-changed', sync);
       window.removeEventListener('storage', sync);
     };
-  }, []);
+  }, [uid]);
 
   useEffect(() => {
     let alive = true;

@@ -579,15 +579,17 @@ export default function TrophyModal({ open, onClose, focusProjectId, onFocusProj
               트로피 목록
             </h2>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <button
-                type="button"
-                className="feed-theme-toggle-btn"
-                onClick={toggleTheme}
-                title={theme === 'dark' ? '밝게' : '야간'}
-                aria-label={theme === 'dark' ? '라이트 모드' : '다크 모드'}
-              >
-                {theme === 'dark' ? '☀' : '🌙'}
-              </button>
+              {user ? (
+                <button
+                  type="button"
+                  className="feed-theme-toggle-btn"
+                  onClick={toggleTheme}
+                  title={theme === 'dark' ? '밝게' : '야간'}
+                  aria-label={theme === 'dark' ? '라이트 모드' : '다크 모드'}
+                >
+                  {theme === 'dark' ? '☀' : '🌙'}
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={onClose}
@@ -640,15 +642,17 @@ export default function TrophyModal({ open, onClose, focusProjectId, onFocusProj
               ← 트로피 목록으로
             </button>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                className="feed-theme-toggle-btn"
-                onClick={toggleTheme}
-                title={theme === 'dark' ? '밝게' : '야간'}
-                aria-label={theme === 'dark' ? '라이트 모드' : '다크 모드'}
-              >
-                {theme === 'dark' ? '☀' : '🌙'}
-              </button>
+              {user ? (
+                <button
+                  type="button"
+                  className="feed-theme-toggle-btn"
+                  onClick={toggleTheme}
+                  title={theme === 'dark' ? '밝게' : '야간'}
+                  aria-label={theme === 'dark' ? '라이트 모드' : '다크 모드'}
+                >
+                  {theme === 'dark' ? '☀' : '🌙'}
+                </button>
+              ) : null}
               {uid && selected?.ownerUserId != null && Number(selected.ownerUserId) === Number(uid) ? (
                 <>
                   <button

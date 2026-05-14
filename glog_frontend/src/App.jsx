@@ -24,9 +24,9 @@ import ProfilePage from './profile/ProfilePage';
 export default function App() {
   return (
     <BrowserRouter>
-      <ThemeProvider>
-        <QueryClientProvider client={feedQueryClient}>
-          <AuthProvider>
+      <QueryClientProvider client={feedQueryClient}>
+        <AuthProvider>
+          <ThemeProvider>
             <TrophyModalProvider>
               <Routes>
                 {/* 공개 라우트 */}
@@ -76,9 +76,9 @@ export default function App() {
                 />
               </Routes>
             </TrophyModalProvider>
-          </AuthProvider>
-        </QueryClientProvider>
-      </ThemeProvider>
+          </ThemeProvider>
+        </AuthProvider>
+      </QueryClientProvider>
     </BrowserRouter>
   );
 }
