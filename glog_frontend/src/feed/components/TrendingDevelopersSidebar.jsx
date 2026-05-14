@@ -1,20 +1,41 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { streakBadgeEmoji } from '../../utils/streakBadgeEmoji';
 import { useLoginModal } from '../auth/LoginModalContext';
-import { fetchTrendingDevelopers, followUserById, unfollowUserById } from '../api/feedApi';
+import { fetchFollowingMembers, fetchTrendingDevelopers, followUserById, unfollowUserById } from '../api/feedApi';
+import followIcon from '../assets/follow/follow.png';
+import followingIcon from '../assets/follow/following.png';
+import unfollowIcon from '../assets/follow/unfollow.png';
 
 /** 피드 우측: 유저 검색과 구독 피드 사이 — GitHub 연동 유저 기준 트렌딩 */
 export default function TrendingDevelopersSidebar() {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
   const { requestLogin } = useLoginModal();
   const qc = useQueryClient();
+  const [hoverUnfollowUserId, setHoverUnfollowUserId] = useState(null);
+
+  const iconImg = { width: 36, height: 36, display: 'block', objectFit: 'contain' };
+
+  const { data: followingMembers = [] } = useQuery({
+    queryKey: ['feed', 'following-members'],
+    queryFn: fetchFollowingMembers,
+    enabled: Boolean(user) && !loading,
+    staleTime: 60_000,
+  });
+
+  const followingIdSet = useMemo(
+    () => new Set(followingMembers.map((m) => Number(m.user_id))),
+    [followingMembers],
+  );
 
   const { data: developers = [], isPending, isError, error } = useQuery({
-    queryKey: ['feed', 'trending-developers'],
+    queryKey: ['feed', 'trending-developers', user?.user_id ?? 'anon'],
     queryFn: fetchTrendingDevelopers,
     staleTime: 90_000,
+    // 인증 전에는 Bearer 없이 요청되어 is_following 이 전부 false로 캐시되는 것을 방지
+    enabled: !loading,
   });
 
   const followMut = useMutation({
@@ -55,8 +76,27 @@ export default function TrendingDevelopersSidebar() {
         <ul className="feed-popular-tags__list" style={{ gap: '0.55rem' }}>
           {developers.map((d) => {
             const self = Boolean(user && Number(user.user_id) === Number(d.user_id));
-            const following = Boolean(d.is_following);
-            const busy = followMut.isPending && followMut.variables?.userId === d.user_id;
+            const following = Boolean(d.is_following) || followingIdSet.has(Number(d.user_id));
+            const busy =
+              followMut.isPending &&
+              Number(followMut.variables?.userId) === Number(d.user_id);
+            const showUnfollowPreview = following && hoverUnfollowUserId === d.user_id;
+            let followSrc = followIcon;
+            let followLabel = '팔로우';
+            if (!self) {
+              if (busy) {
+                if (followMut.variables?.doFollow) {
+                  followSrc = followingIcon;
+                  followLabel = '처리 중…';
+                } else {
+                  followSrc = unfollowIcon;
+                  followLabel = '처리 중…';
+                }
+              } else if (following) {
+                followSrc = showUnfollowPreview ? unfollowIcon : followingIcon;
+                followLabel = showUnfollowPreview ? '언팔로우' : '팔로잉';
+              }
+            }
             return (
               <li key={d.user_id}>
                 <div
@@ -112,14 +152,18 @@ export default function TrendingDevelopersSidebar() {
                   {self ? null : (
                     <button
                       type="button"
-                      className={following ? 'feed-btn-outline' : 'feed-btn-primary'}
+                      className="feed-follow-icon-btn"
                       style={{
                         flexShrink: 0,
-                        padding: '0.28rem 0.5rem',
-                        fontSize: '0.68rem',
-                        fontWeight: 700,
-                        minWidth: '3.2rem',
+                        borderRadius: '50%',
+                        minWidth: 44,
+                        minHeight: 44,
+                        padding: 0,
+                        cursor: busy ? 'wait' : 'pointer',
+                        opacity: busy ? 0.55 : 1,
                       }}
+                      aria-label={followLabel}
+                      title={followLabel}
                       disabled={busy}
                       onClick={() => {
                         if (!user) {
@@ -128,8 +172,14 @@ export default function TrendingDevelopersSidebar() {
                         }
                         followMut.mutate({ userId: d.user_id, doFollow: !following });
                       }}
+                      onMouseEnter={() => following && setHoverUnfollowUserId(d.user_id)}
+                      onMouseLeave={() =>
+                        setHoverUnfollowUserId((cur) =>
+                          Number(cur) === Number(d.user_id) ? null : cur,
+                        )
+                      }
                     >
-                      {busy ? '…' : following ? '팔로잉' : '팔로우'}
+                      <img src={followSrc} alt="" width={36} height={36} style={iconImg} decoding="async" />
                     </button>
                   )}
                 </div>

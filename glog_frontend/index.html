@@ -1,8 +1,36 @@
 <!DOCTYPE html>
-<html lang="ko" data-theme="dark">
+<html lang="ko">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- React 전 첫 페인트: ThemeContext.readThemeBootstrap 과 동일 규칙 유지 -->
+    <script>
+      (function () {
+        try {
+          var s = sessionStorage.getItem('glog-feed-theme-last');
+          if (s === 'light' || s === 'dark') {
+            document.documentElement.setAttribute('data-theme', s);
+            return;
+          }
+          var lg = localStorage.getItem('glog-feed-theme');
+          if (lg === 'light' || lg === 'dark') {
+            document.documentElement.setAttribute('data-theme', lg);
+            return;
+          }
+          for (var i = 0; i < localStorage.length; i++) {
+            var k = localStorage.key(i);
+            if (k && /^glog-feed-theme-u\d+$/.test(k)) {
+              var v = localStorage.getItem(k);
+              if (v === 'light' || v === 'dark') {
+                document.documentElement.setAttribute('data-theme', v);
+                return;
+              }
+            }
+          }
+        } catch (e) {}
+        document.documentElement.setAttribute('data-theme', 'dark');
+      })();
+    </script>
     <title>Glog</title>
     <style>
       /* 브라우저 기본 margin/padding 제거 */

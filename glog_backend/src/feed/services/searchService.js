@@ -420,9 +420,18 @@ async function autocompleteUsers(q, viewerId, take) {
   }));
 }
 
-async function autocompleteSuggestions(q, viewerId) {
-  const blockedIds = await getBlockedUserIds(viewerId);
+async function autocompleteHashtags(q, take) {
+  const rows = await prisma.hashtag.findMany({
+    where: { name: { contains: q } },
+    orderBy: { use_count: 'desc' },
+    take,
+    select: { hashtag_id: true, name: true, use_count: true },
+  });
+  return rows.map((t) => ({ hashtag_id: t.hashtag_id, name: t.name, use_count: t.use_count }));
+}
 
+async function buildPublicPostHintWhere(q, viewerId) {
+  const blockedIds = await getBlockedUserIds(viewerId);
   const andParts = [
     {
       OR: [
@@ -434,34 +443,108 @@ async function autocompleteSuggestions(q, viewerId) {
   if (viewerId && blockedIds.length) {
     andParts.unshift({ OR: [{ user_id: null }, { user_id: { notIn: blockedIds } }] });
   }
+  return { is_deleted: false, type: 'public', AND: andParts };
+}
 
-  const tagRows = await prisma.hashtag.findMany({
-    where: { name: { contains: q } },
-    orderBy: { use_count: 'desc' },
-    take: 2,
-    select: { hashtag_id: true, name: true, use_count: true },
-  });
-
-  const postRows = await prisma.post.findMany({
-    where: {
-      is_deleted: false,
-      type: 'public',
-      AND: andParts,
-    },
+async function autocompletePosts(q, viewerId, take) {
+  const where = await buildPublicPostHintWhere(q, viewerId);
+  const rows = await prisma.post.findMany({
+    where,
     orderBy: [{ created_at: 'desc' }, { post_id: 'desc' }],
-    take: 2,
+    take,
     select: {
       post_id: true,
+      type: true,
       content: true,
-      user: { select: { nickname: true } },
+      like_count: true,
+      comment_count: true,
+      is_edited: true,
+      anonymous_avatar_index: true,
+      user: { select: { user_id: true, nickname: true, avatar_url: true, bio: true } },
+      post_hashtags: { take: 8, select: { hashtag: { select: { name: true } } } },
+      images: { take: 1, orderBy: { display_order: 'asc' }, select: { image_url: true } },
     },
   });
+  return rows.map((p) => ({
+    post_id: p.post_id,
+    type: p.type,
+    content: p.content,
+    like_count: p.like_count,
+    comment_count: p.comment_count,
+    is_edited: p.is_edited,
+    anonymous_avatar_index: p.anonymous_avatar_index,
+    user: p.user,
+    hashtags: p.post_hashtags.map((x) => ({ name: x.hashtag.name })),
+    images: p.images.map((x) => ({ image_url: x.image_url })),
+  }));
+}
+
+async function autocompleteProjects(q, viewerId, take) {
+  const blockedIds = await getBlockedUserIds(viewerId);
+  const where = {
+    is_deleted: false,
+    OR: [
+      { title: { contains: q } },
+      { description: { contains: q } },
+      { project_tags: { some: { tag_name: { contains: q } } } },
+    ],
+  };
+  if (viewerId && blockedIds.length) {
+    where.user_id = { notIn: blockedIds };
+  }
+  const rows = await prisma.project.findMany({
+    where,
+    orderBy: [{ updated_at: 'desc' }, { projects_id: 'desc' }],
+    take,
+    select: {
+      projects_id: true,
+      title: true,
+      description: true,
+      image_url: true,
+      start_date: true,
+      end_date: true,
+      created_at: true,
+      project_tags: { take: 10, select: { tag_name: true } },
+      trophy: { select: { grade: true, like_count: true } },
+      user: { select: { nickname: true } },
+      _count: { select: { comments: true } },
+    },
+  });
+  return rows.map((r) => ({
+    project_id: r.projects_id,
+    title: r.title,
+    description: r.description,
+    image_url: r.image_url,
+    start_date: r.start_date,
+    end_date: r.end_date,
+    created_at: r.created_at,
+    author_nickname: r.user?.nickname || null,
+    tags: r.project_tags.map((t) => t.tag_name),
+    trophy_grade: r.trophy?.grade || null,
+    trophy_like_count: r.trophy?.like_count ?? 0,
+    comment_count: r._count.comments,
+  }));
+}
+
+async function autocomplete(qRaw, viewerId) {
+  const trimmed = String(qRaw ?? '').trim();
+  if (!trimmed) {
+    return { users: [], hashtags: [], posts: [], projects: [], suggestions: [] };
+  }
+  if (trimmed.length > 100) throw err('VALIDATION_ERROR', '검색어는 100자 이하여야 합니다.');
+
+  const [users, hashtags, posts, projects] = await Promise.all([
+    autocompleteUsers(trimmed, viewerId, 8),
+    autocompleteHashtags(trimmed, 8),
+    autocompletePosts(trimmed, viewerId, 5),
+    autocompleteProjects(trimmed, viewerId, 5),
+  ]);
 
   const suggestions = [];
-  for (const t of tagRows) {
+  for (const t of hashtags.slice(0, 2)) {
     suggestions.push({ type: 'hashtag', hashtag_id: t.hashtag_id, name: t.name, use_count: t.use_count });
   }
-  for (const p of postRows) {
+  for (const p of posts.slice(0, 2)) {
     const snippet = String(p.content || '')
       .replace(/\s+/g, ' ')
       .trim()
@@ -473,19 +556,8 @@ async function autocompleteSuggestions(q, viewerId) {
       author_nickname: p.user?.nickname || null,
     });
   }
-  return suggestions.slice(0, 3);
-}
 
-async function autocomplete(qRaw, viewerId) {
-  const trimmed = String(qRaw ?? '').trim();
-  if (!trimmed) {
-    return { users: [], suggestions: [] };
-  }
-  if (trimmed.length > 100) throw err('VALIDATION_ERROR', '검색어는 100자 이하여야 합니다.');
-
-  const users = await autocompleteUsers(trimmed, viewerId, 2);
-  const suggestions = await autocompleteSuggestions(trimmed, viewerId);
-  return { users, suggestions };
+  return { users, hashtags, posts, projects, suggestions: suggestions.slice(0, 3) };
 }
 
 module.exports = {

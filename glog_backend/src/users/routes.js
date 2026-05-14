@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../config/db');
 const authenticate = require('../auth/middleware');
+const optionalAuthenticate = require('../auth/optionalAuthMiddleware');
 const { syncUserStreakById, applyTempStreakCoinFloorForUserId } = require('../services/streakSyncService');
 
 // PATCH /api/users/me/status — 온라인 상태
@@ -340,8 +341,8 @@ router.get('/:userId/following', async (req, res) => {
 });
 
 // GET /api/users/:userId
-// 특정 유저의 공개 프로필 조회 - 로그인 불필요 (공개 정보만 반환)
-router.get('/:userId', async (req, res) => {
+// 특정 유저의 공개 프로필 조회 - 로그인 불필요 (공개 정보만 반환). Bearer 있으면 is_following 포함.
+router.get('/:userId', optionalAuthenticate, async (req, res) => {
   const userId = parseInt(req.params.userId);
 
   if (isNaN(userId)) {
@@ -365,6 +366,18 @@ router.get('/:userId', async (req, res) => {
       return res.status(404).json({ message: '존재하지 않는 유저입니다.' });
     }
 
+    const viewerId = req.user?.userId ?? null;
+    let is_following = false;
+    if (viewerId && viewerId !== userId) {
+      const rel = await prisma.follow.findUnique({
+        where: {
+          follower_id_following_id: { follower_id: viewerId, following_id: userId },
+        },
+        select: { follower_id: true },
+      });
+      is_following = Boolean(rel);
+    }
+
     res.json({
       user_id: user.user_id,
       nickname: user.nickname,
@@ -379,6 +392,7 @@ router.get('/:userId', async (req, res) => {
       follower_count: user._count.followers,
       following_count: user._count.following,
       status: user.user_status?.status ?? 'offline',
+      is_following,
     });
   } catch (err) {
     console.error('[GetUser Error]', err.message);

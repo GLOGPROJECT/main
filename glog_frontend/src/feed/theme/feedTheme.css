@@ -265,6 +265,11 @@
   box-shadow: var(--feed-shadow);
 }
 
+/* 사이드바 검색: 드롭다운이 아래 카드에 잘리지 않도록 */
+.feed-card.feed-sidebar-search-card {
+  overflow: visible;
+}
+
 .feed-sidebar-left,
 .feed-sidebar-right {
   display: flex;
@@ -2246,6 +2251,37 @@ button.feed-post-author-link-btn {
   border-top: 1px solid var(--feed-border);
   margin-top: 0.25rem;
   padding-top: 0.25rem;
+}
+
+.feed-sidebar-search-dropdown .feed-post {
+  margin-bottom: 0.6rem;
+}
+
+.feed-sidebar-search-dropdown .feed-post:last-child {
+  margin-bottom: 0;
+}
+
+/* 통합 검색 자동완성: URL 짧은 캡슐(한 줄 넘침 방지) */
+.feed-search-autocomplete-url-pill {
+  display: inline-block;
+  max-width: min(100%, 11.5rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  margin: 0 0.12em;
+  padding: 0.1em 0.45em;
+  border-radius: 999px;
+  font-size: 0.78em;
+  font-weight: 600;
+  background: rgba(250, 204, 21, 0.14);
+  color: var(--feed-text-primary);
+  border: 1px solid var(--feed-border);
+  box-sizing: border-box;
+}
+
+.feed-search-autocomplete-trophy-wrap {
+  overflow: visible;
 }
 
 /* 프로필·지구본 게시글 미리보기 팝업 */

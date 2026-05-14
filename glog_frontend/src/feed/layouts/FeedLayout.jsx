@@ -467,7 +467,7 @@ function FeedLayoutInner() {
         </main>
 
         <aside className="feed-sidebar-right" aria-label="탐색">
-          <div className="feed-card">
+          <div className="feed-card feed-sidebar-search-card">
             <FeedSidebarSearch />
           </div>
           <TrendingDevelopersSidebar />

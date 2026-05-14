@@ -1,7 +1,13 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { useParams, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../../api/axios';
 import { useAuth } from '../../auth/hooks/useAuth';
+import { useLoginModal } from '../auth/LoginModalContext';
+import { followUserById, unfollowUserById } from '../api/feedApi';
+import followIcon from '../assets/follow/follow.png';
+import followingIcon from '../assets/follow/following.png';
+import unfollowIcon from '../assets/follow/unfollow.png';
 import FeedTabs from '../components/FeedTabs';
 import FeedSortAndTheme from '../components/FeedSortAndTheme';
 import FeedList from '../components/FeedList';
@@ -12,12 +18,35 @@ const LIST_TABS = new Set(['posts', 'likes', 'streak', 'projects', 'following', 
 export default function FeedUserPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
+  const { requestLogin } = useLoginModal();
+  const qc = useQueryClient();
   const { userId: userIdParam } = useParams();
   const location = useLocation();
   const nickname = location.state?.nickname;
   const uid = parseInt(String(userIdParam), 10);
   const invalidId = !Number.isFinite(uid) || uid < 1;
+
+  const [hoverUnfollowUserId, setHoverUnfollowUserId] = useState(null);
+
+  const profileQuery = useQuery({
+    queryKey: ['users', 'profile', uid, user?.user_id ?? 'anon'],
+    queryFn: () => api.get(`/users/${uid}`).then((r) => r.data),
+    enabled: !invalidId && !loading,
+  });
+
+  const followMut = useMutation({
+    mutationFn: async ({ userId: targetId, doFollow }) => {
+      if (doFollow) await followUserById(targetId);
+      else await unfollowUserById(targetId);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['users', 'profile', uid] });
+      void qc.invalidateQueries({ queryKey: ['feed', 'trending-developers'] });
+      void qc.invalidateQueries({ queryKey: ['feed', 'following-members'] });
+      void qc.invalidateQueries({ queryKey: ['feed', 'following'] });
+    },
+  });
 
   const isOwnProfile = user != null && Number(user.user_id) === uid;
   const goAllFeed = () => navigate('/feed');
@@ -25,7 +54,6 @@ export default function FeedUserPage() {
   const postsTabLabel = isOwnProfile ? '공개·익명 게시글' : '공개 게시글';
 
   const [prependPosts, setPrependPosts] = useState([]);
-  const [profileNickname, setProfileNickname] = useState(null);
 
   const tabParam = searchParams.get('tab');
   const listTab = LIST_TABS.has(tabParam) ? tabParam : 'posts';
@@ -43,31 +71,9 @@ export default function FeedUserPage() {
   };
 
   useEffect(() => {
-    if (!Number.isFinite(uid) || uid < 1) {
-      setProfileNickname(null);
-      return;
-    }
-    let alive = true;
-    api
-      .get(`/users/${uid}`)
-      .then(({ data }) => {
-        if (!alive) return;
-        const n = data?.nickname;
-        setProfileNickname(n && String(n).trim() ? String(n).trim() : null);
-      })
-      .catch(() => {
-        if (!alive) return;
-        setProfileNickname(null);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [uid]);
-
-  useEffect(() => {
     if (!isOwnProfile) return;
     const onNew = (e) => {
-      const post = e.detail;
+      const post = e.detail?.post;
       if (!post?.id) return;
       setPrependPosts((prev) => [post, ...prev.filter((p) => p.id !== post.id)]);
     };
@@ -94,8 +100,33 @@ export default function FeedUserPage() {
     );
   }
 
+  const profile = profileQuery.data;
   const headerTitle =
-    (nickname && String(nickname).trim()) || profileNickname || `유저 #${userIdParam}`;
+    (nickname && String(nickname).trim()) ||
+    (profile?.nickname && String(profile.nickname).trim()) ||
+    `유저 #${userIdParam}`;
+
+  const iFollow = Boolean(profile?.is_following);
+  const busy = followMut.isPending && Number(followMut.variables?.userId) === uid;
+  const showUnfollowPreview = iFollow && hoverUnfollowUserId === uid;
+  let followSrc = followIcon;
+  let followLabel = '팔로우';
+  if (!isOwnProfile) {
+    if (busy) {
+      if (followMut.variables?.doFollow) {
+        followSrc = followingIcon;
+        followLabel = '처리 중…';
+      } else {
+        followSrc = unfollowIcon;
+        followLabel = '처리 중…';
+      }
+    } else if (iFollow) {
+      followSrc = showUnfollowPreview ? unfollowIcon : followingIcon;
+      followLabel = showUnfollowPreview ? '언팔로우' : '팔로잉';
+    }
+  }
+
+  const followBtnPx = 52;
 
   return (
     <>
@@ -109,8 +140,109 @@ export default function FeedUserPage() {
             ←
           </button>
           <div className="feed-user-page-header-text">
-            <div className="feed-post-author" style={{ fontSize: '1.05rem' }}>
-              {headerTitle}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                flexWrap: 'nowrap',
+                minWidth: 0,
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  minWidth: 0,
+                  flex: 1,
+                }}
+              >
+                {profile?.avatar_url ? (
+                  <img
+                    src={profile.avatar_url}
+                    alt=""
+                    width={48}
+                    height={48}
+                    style={{ borderRadius: 12, objectFit: 'cover', flexShrink: 0, display: 'block' }}
+                    decoding="async"
+                  />
+                ) : (
+                  <div
+                    className="feed-avatar feed-avatar-sm"
+                    style={{ width: 48, height: 48, borderRadius: 12, flexShrink: 0 }}
+                    aria-hidden
+                  />
+                )}
+                <div
+                  className="feed-post-author"
+                  style={{
+                    fontSize: '1.05rem',
+                    margin: 0,
+                    minWidth: 0,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {headerTitle}
+                </div>
+              </div>
+              {!isOwnProfile ? (
+                <button
+                  type="button"
+                  className="feed-follow-icon-btn"
+                  style={{
+                    flexShrink: 0,
+                    borderRadius: '50%',
+                    width: followBtnPx,
+                    height: followBtnPx,
+                    minWidth: followBtnPx,
+                    minHeight: followBtnPx,
+                    padding: 0,
+                    boxSizing: 'border-box',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    lineHeight: 0,
+                    cursor: busy ? 'wait' : 'pointer',
+                    opacity: busy ? 0.55 : 1,
+                    border: 'none',
+                    outline: 'none',
+                    background: 'transparent',
+                    boxShadow: 'none',
+                  }}
+                  aria-label={followLabel}
+                  title={followLabel}
+                  disabled={busy}
+                  onClick={() => {
+                    if (!user) {
+                      requestLogin();
+                      return;
+                    }
+                    followMut.mutate({ userId: uid, doFollow: !iFollow });
+                  }}
+                  onMouseEnter={() => iFollow && setHoverUnfollowUserId(uid)}
+                  onMouseLeave={() =>
+                    setHoverUnfollowUserId((cur) => (Number(cur) === uid ? null : cur))
+                  }
+                >
+                  <img
+                    src={followSrc}
+                    alt=""
+                    width={followBtnPx}
+                    height={followBtnPx}
+                    style={{
+                      width: followBtnPx,
+                      height: followBtnPx,
+                      display: 'block',
+                      objectFit: 'contain',
+                    }}
+                    decoding="async"
+                  />
+                </button>
+              ) : null}
             </div>
             <div className="feed-user-page-tabs" role="tablist" aria-label="프로필 구분">
               <button

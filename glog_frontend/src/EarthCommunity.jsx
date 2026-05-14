@@ -24,6 +24,7 @@
  */
 
 import React, { useRef, useState, useMemo, useEffect, useLayoutEffect, useCallback, Suspense } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useGLTF, Html, OrbitControls, useAnimations } from "@react-three/drei";
 import { SkeletonUtils } from "three-stdlib";
@@ -38,11 +39,27 @@ import PetShopModal from "./petshop/petShopModal";
 import DailyRewardModal from "./daily-reward/DailyRewardModal";
 import AvatarViewerModal from "./avatar-viewer/AvatarViewerModal";
 import PostCard, { HeartIcon } from "./feed/components/PostCard";
+import { SearchAutocompletePostRow, SearchAutocompleteProjectRow } from "./feed/components/SearchAutocompleteRows";
 import CommentSection from "./feed/components/CommentSection";
 import { isAnonymousPost } from "./feed/utils/anonAvatar";
 import { getTagPillColors } from "./feed/utils/tagPillColors";
-import { fetchPostById, togglePostLike, toggleTrophyLike } from "./feed/api/feedApi";
+import {
+  fetchPostById,
+  togglePostLike,
+  toggleTrophyLike,
+  fetchFollowingMembers,
+  followUserById,
+  unfollowUserById,
+} from "./feed/api/feedApi";
+import followIcon from "./feed/assets/follow/follow.png";
+import followingIcon from "./feed/assets/follow/following.png";
+import unfollowIcon from "./feed/assets/follow/unfollow.png";
 import { fetchSearchAutocomplete } from "./feed/api/searchApi";
+import {
+  mergeMeIntoUserSearchIfMatch,
+  postContentOrHashtagMatchesQuery,
+  projectTitleOrDescriptionMatchesQuery,
+} from "./feed/utils/searchQueryMatch";
 import { streakBadgeEmoji } from "./utils/streakBadgeEmoji";
 import { countTrophiesByGrade } from "./utils/trophyGradeCounts";
 import ProjectRegisterModal from "./feed/components/ProjectRegisterModal";
@@ -416,11 +433,11 @@ function normalizeGlobeSearchKeyword(raw) {
   return String(raw ?? "").trim().slice(0, 100);
 }
 
-function buildSearchSnippet(raw) {
-  const txt = String(raw ?? "").replace(/\s+/g, " ").trim();
-  if (!txt) return "";
-  return txt.length > 90 ? `${txt.slice(0, 90)}…` : txt;
-}
+const GLOBE_SEARCH_GRADE_IMG = {
+  gold: "/goldtrophy.svg",
+  silver: "/silvertrophy.svg",
+  bronze: "/bronzetrophy.svg",
+};
 
 function buildProjectEditDraftFromPreview(p) {
   if (!p?.id) return null;
@@ -475,6 +492,37 @@ function mapProjectsApiToTrophyList(data) {
     updatedAtLabel: formatYmdDotFromIso(row.updated_at),
     contributors: Array.isArray(row.contributors) ? row.contributors : [],
   }));
+}
+
+function normalizeRowForTrophyListMap(row) {
+  if (!row) return null;
+  const pid = row.project_id ?? row.projects_id;
+  if (pid == null) return null;
+  const techStacks =
+    Array.isArray(row.techStacks) && row.techStacks.length
+      ? row.techStacks
+      : Array.isArray(row.tags)
+        ? row.tags
+        : [];
+  const grade = row.grade != null && row.grade !== "" ? row.grade : row.trophy_grade ?? null;
+  const likesVal = row.likes ?? row.trophy_like_count;
+  const commentsVal = row.comments ?? row.comment_count;
+  return {
+    ...row,
+    project_id: pid,
+    trophy_id: row.trophy_id ?? row.trophyId ?? null,
+    techStacks,
+    grade,
+    likes: likesVal != null ? Number(likesVal) : 0,
+    comments: commentsVal != null ? Number(commentsVal) : 0,
+  };
+}
+
+function projectRowToTrophyPreview(row) {
+  const n = normalizeRowForTrophyListMap(row);
+  if (!n) return null;
+  const list = mapProjectsApiToTrophyList({ items: [n] });
+  return list[0] || null;
 }
 
 /** 패널용: 타임스탬프(ms) → 상대 시각 문자열 */
@@ -605,6 +653,8 @@ export default function EarthCommunity() {
   const [trophyRefreshKey, setTrophyRefreshKey] = useState(0);
   const [earthPanelPostListRefreshKey, setEarthPanelPostListRefreshKey] = useState(0);
   const [globeSearchQ, setGlobeSearchQ] = useState("");
+  /** 지구본 검색 기준: 유저 / 게시글 / 트로피(프로젝트) 중 하나만 */
+  const [globeSearchScope, setGlobeSearchScope] = useState("user");
   const [globeSearchDebounced, setGlobeSearchDebounced] = useState("");
   const [globeSearchOpen, setGlobeSearchOpen] = useState(false);
   const [globeSearchUsers, setGlobeSearchUsers] = useState([]);
@@ -615,6 +665,8 @@ export default function EarthCommunity() {
   const [globeSearchResultPosts, setGlobeSearchResultPosts] = useState([]);
   const [globeSearchResultProjects, setGlobeSearchResultProjects] = useState([]);
   const globeSearchWrapRef = useRef(null);
+  const globeSearchInputRef = useRef(null);
+  const [globeSearchHoverUnfollowUserId, setGlobeSearchHoverUnfollowUserId] = useState(null);
   const [globeModalPost, setGlobeModalPost] = useState(null);
   const [globeModalLoad, setGlobeModalLoad] = useState("idle");
   const globeModalBodyRef = useRef(null);
@@ -636,6 +688,30 @@ export default function EarthCommunity() {
   const { theme, toggleTheme } = useFeedTheme();
   const { openTrophyModal, closeTrophyModal, isTrophyModalOpen } = useTrophyModal();
 
+  const qc = useQueryClient();
+  const { data: followingMembers = [] } = useQuery({
+    queryKey: ["feed", "following-members"],
+    queryFn: fetchFollowingMembers,
+    enabled: Boolean(me),
+    staleTime: 60_000,
+  });
+  const followingIdSet = useMemo(
+    () => new Set(followingMembers.map((m) => Number(m.user_id))),
+    [followingMembers],
+  );
+  const globeSearchFollowMut = useMutation({
+    mutationFn: async ({ userId: targetId, doFollow }) => {
+      if (doFollow) await followUserById(targetId);
+      else await unfollowUserById(targetId);
+    },
+    onSuccess: (_data, { userId: targetId }) => {
+      setGlobeSearchHoverUnfollowUserId((cur) => (Number(cur) === Number(targetId) ? null : cur));
+      void qc.invalidateQueries({ queryKey: ["feed", "following-members"] });
+      void qc.invalidateQueries({ queryKey: ["feed", "following"] });
+      void qc.invalidateQueries({ queryKey: ["feed", "trending-developers"] });
+    },
+  });
+
   const globeChrome = useMemo(() => {
     const L = theme === "light";
     return {
@@ -656,7 +732,7 @@ export default function EarthCommunity() {
         gap: 8,
         alignItems: "center",
         borderRadius: 10,
-        padding: "6px",
+        padding: "10px",
         background: L ? "rgba(255,255,255,0.96)" : "rgba(30, 41, 59, 0.92)",
         border: L ? "1px solid rgba(15,23,42,0.14)" : "1px solid rgba(148,163,184,0.28)",
         boxShadow: L ? "0 8px 20px rgba(15,23,42,0.1)" : "0 8px 28px rgba(0,0,0,0.45)",
@@ -665,18 +741,38 @@ export default function EarthCommunity() {
         flex: 1,
         minWidth: 0,
         borderRadius: 8,
-        padding: "8px 10px",
-        fontSize: "0.82rem",
+        padding: "11px 12px",
+        fontSize: "0.84rem",
         color: L ? "#0f1c36" : "#e2e8f0",
         background: L ? "#ffffff" : "#0f172a",
         border: L ? "1px solid rgba(15,23,42,0.12)" : "1px solid rgba(100,116,139,0.35)",
+      },
+      searchScopeLabel: {
+        fontSize: "0.76rem",
+        color: L ? "#64748b" : "#94a3b8",
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+      },
+      searchScopeSelect: {
+        padding: "9px 10px",
+        fontSize: "0.78rem",
+        borderRadius: 8,
+        border: L ? "1px solid rgba(15,23,42,0.12)" : "1px solid rgba(100,116,139,0.35)",
+        background: L ? "#ffffff" : "#0f172a",
+        color: L ? "#0f1c36" : "#e2e8f0",
+        maxWidth: 108,
+        minWidth: 88,
+        cursor: "pointer",
       },
       searchSuggest: {
         position: "absolute",
         left: 0,
         right: 0,
         bottom: "calc(100% + 8px)",
-        maxHeight: 250,
+        maxHeight: "min(72vh, 520px)",
         overflowY: "auto",
         borderRadius: 10,
         padding: "8px 0",
@@ -705,9 +801,9 @@ export default function EarthCommunity() {
       searchResultPopup: {
         position: "absolute",
         right: 14,
-        bottom: 74,
-        width: 356,
-        maxHeight: 300,
+        bottom: 100,
+        width: 384,
+        maxHeight: "min(72vh, 520px)",
         display: "flex",
         flexDirection: "column",
         borderRadius: 12,
@@ -722,6 +818,7 @@ export default function EarthCommunity() {
         alignItems: "center",
         justifyContent: "space-between",
         padding: "8px 10px",
+        flexShrink: 0,
         borderBottom: L ? "1px solid rgba(15,23,42,0.1)" : "1px solid rgba(148,163,184,0.18)",
         background: L ? "rgba(241,245,249,0.95)" : "rgba(30,41,59,0.95)",
         color: L ? "#0f172a" : "#e2e8f0",
@@ -729,7 +826,8 @@ export default function EarthCommunity() {
       searchResultBody: {
         padding: "8px",
         overflowY: "auto",
-        maxHeight: 248,
+        flex: 1,
+        minHeight: 0,
         display: "flex",
         flexDirection: "column",
         gap: 8,
@@ -881,6 +979,12 @@ export default function EarthCommunity() {
   }, [globeSearchQ]);
 
   useEffect(() => {
+    if (globeSearchResultOpen) {
+      setGlobeSearchUsers([]);
+      setGlobeSearchPosts([]);
+      setGlobeSearchProjects([]);
+      return;
+    }
     const q = globeSearchDebounced;
     if (!globeSearchOpen || !q) {
       setGlobeSearchUsers([]);
@@ -891,33 +995,49 @@ export default function EarthCommunity() {
     let cancelled = false;
     (async () => {
       try {
+        if (globeSearchScope === "user") {
+          const { data } = await api.get("/search", { params: { type: "user", q, limit: 6 } });
+          if (cancelled) return;
+          const users = mergeMeIntoUserSearchIfMatch(
+            Array.isArray(data?.users) ? data.users.slice(0, 6) : [],
+            q,
+            me,
+          );
+          setGlobeSearchUsers(users);
+          setGlobeSearchPosts([]);
+          setGlobeSearchProjects([]);
+          return;
+        }
+        if (globeSearchScope === "post") {
+          const { data } = await api.get("/search", { params: { type: "post", q, limit: 6 } });
+          if (cancelled) return;
+          const postsRaw = Array.isArray(data?.posts) ? data.posts : [];
+          const postsFiltered = postsRaw.filter((p) => postContentOrHashtagMatchesQuery(p, q)).slice(0, 6);
+          setGlobeSearchUsers([]);
+          setGlobeSearchPosts(postsFiltered);
+          setGlobeSearchProjects([]);
+          return;
+        }
         const [auto, projectsRes] = await Promise.all([
-          fetchSearchAutocomplete(q).catch(() => ({ users: [], suggestions: [] })),
+          fetchSearchAutocomplete(q).catch(() => ({
+            users: [],
+            suggestions: [],
+            posts: [],
+            projects: [],
+            hashtags: [],
+          })),
           api.get("/projects/community", { params: { sort: "latest" } }).catch(() => ({ data: { items: [] } })),
         ]);
         if (cancelled) return;
-        const users = Array.isArray(auto?.users) ? auto.users.slice(0, 6) : [];
-        const posts = (Array.isArray(auto?.suggestions) ? auto.suggestions : [])
-          .filter((s) => s && s.type === "post" && s.post_id != null)
-          .slice(0, 6);
+        setGlobeSearchUsers([]);
+        setGlobeSearchPosts([]);
+        const apiProjects = Array.isArray(auto?.projects) ? auto.projects : [];
         const rows = Array.isArray(projectsRes?.data?.items) ? projectsRes.data.items : [];
-        const lowQ = q.toLowerCase();
-        const projects = rows
-          .filter((row) => {
-            const title = String(row?.title ?? "").toLowerCase();
-            const desc = String(row?.description ?? "").toLowerCase();
-            const author = String(row?.author_nickname ?? "").toLowerCase();
-            return title.includes(lowQ) || desc.includes(lowQ) || author.includes(lowQ);
-          })
-          .slice(0, 6)
-          .map((row) => ({
-            id: row.project_id,
-            title: String(row.title ?? "").trim() || "제목 없음",
-            author: String(row.author_nickname ?? "").trim(),
-            snippet: buildSearchSnippet(row.description),
-          }));
-        setGlobeSearchUsers(users);
-        setGlobeSearchPosts(posts);
+        const fromApi = apiProjects.filter((row) => projectTitleOrDescriptionMatchesQuery(row, q)).slice(0, 6);
+        const projects =
+          fromApi.length > 0
+            ? fromApi
+            : rows.filter((row) => projectTitleOrDescriptionMatchesQuery(row, q)).slice(0, 6);
         setGlobeSearchProjects(projects);
       } catch {
         if (cancelled) return;
@@ -929,7 +1049,7 @@ export default function EarthCommunity() {
     return () => {
       cancelled = true;
     };
-  }, [globeSearchDebounced, globeSearchOpen]);
+  }, [globeSearchDebounced, globeSearchOpen, globeSearchResultOpen, globeSearchScope, me]);
 
   useEffect(() => {
     if (!globeSearchOpen) return undefined;
@@ -958,38 +1078,88 @@ export default function EarthCommunity() {
       } else {
         navigate(`/profile/${userId}`);
       }
+      setGlobeSearchQ("");
+      setGlobeSearchDebounced("");
       setGlobeSearchOpen(false);
+      setGlobeSearchResultOpen(false);
+      requestAnimationFrame(() => {
+        globeSearchInputRef.current?.blur();
+      });
     },
     [globeUsers, navigate],
+  );
+
+  const openGlobeSearchProjectById = useCallback(
+    (projectId) => {
+      const pid = Number(projectId);
+      if (!Number.isFinite(pid) || pid <= 0) return;
+      if (!me) {
+        setGuestGlobeLoginOpen(true);
+        return;
+      }
+      setShowShop(false);
+      setActiveNav("트로피");
+      openTrophyModal({ projectId: pid });
+      setGlobeSearchOpen(false);
+    },
+    [me, openTrophyModal],
   );
 
   const openGlobeSearchResults = useCallback(async () => {
     const q = normalizeGlobeSearchKeyword(globeSearchQ);
     if (!q) return;
+    setGlobeSearchOpen(false);
     try {
-      const [autoRes, postRes, projectsRes] = await Promise.all([
-        fetchSearchAutocomplete(q).catch(() => ({ users: [], suggestions: [] })),
-        api.get("/search", { params: { type: "post", q, limit: 8 } }).catch(() => ({ data: { posts: [] } })),
+      if (globeSearchScope === "user") {
+        const { data } = await api.get("/search", { params: { type: "user", q, limit: 8 } });
+        const users = mergeMeIntoUserSearchIfMatch(
+          Array.isArray(data?.users) ? data.users.slice(0, 8) : [],
+          q,
+          me,
+        );
+        setGlobeSearchResultUsers(users);
+        setGlobeSearchResultPosts([]);
+        setGlobeSearchResultProjects([]);
+        setGlobeSearchResultOpen(true);
+        setGlobeSearchOpen(false);
+        return;
+      }
+      if (globeSearchScope === "post") {
+        const { data } = await api.get("/search", { params: { type: "post", q, limit: 8 } });
+        const postsRaw = Array.isArray(data?.posts) ? data.posts : [];
+        setGlobeSearchResultUsers([]);
+        setGlobeSearchResultPosts(postsRaw.filter((p) => postContentOrHashtagMatchesQuery(p, q)).slice(0, 8));
+        setGlobeSearchResultProjects([]);
+        setGlobeSearchResultOpen(true);
+        setGlobeSearchOpen(false);
+        return;
+      }
+      const [autoRes, projectsRes] = await Promise.all([
+        fetchSearchAutocomplete(q).catch(() => ({
+          users: [],
+          suggestions: [],
+          posts: [],
+          projects: [],
+          hashtags: [],
+        })),
         api.get("/projects/community", { params: { sort: "latest" } }).catch(() => ({ data: { items: [] } })),
       ]);
-      const users = Array.isArray(autoRes?.users) ? autoRes.users.slice(0, 8) : [];
-      const posts = (Array.isArray(postRes?.data?.posts) ? postRes.data.posts : []).map((p) => ({
-        id: p.post_id,
-        author: String(p?.user?.nickname ?? "").trim(),
-        snippet: buildSearchSnippet(p.content),
-      }));
-      const lowQ = q.toLowerCase();
-      const projects = mapProjectsApiToTrophyList(projectsRes?.data)
-        .filter((p) => {
-          const title = String(p.title ?? "").toLowerCase();
-          const desc = String(p.desc ?? "").toLowerCase();
-          const author = String(p.authorNickname ?? "").toLowerCase();
-          return title.includes(lowQ) || desc.includes(lowQ) || author.includes(lowQ);
-        })
-        .slice(0, 8);
-      setGlobeSearchResultUsers(users);
-      setGlobeSearchResultPosts(posts);
-      setGlobeSearchResultProjects(projects);
+      const apiProj = Array.isArray(autoRes?.projects) ? autoRes.projects : [];
+      const apiProjFiltered = apiProj.filter((r) => projectTitleOrDescriptionMatchesQuery(r, q));
+      let resultProjects;
+      if (apiProjFiltered.length > 0) {
+        resultProjects = apiProjFiltered
+          .slice(0, 8)
+          .map((r) => projectRowToTrophyPreview(r))
+          .filter(Boolean);
+      } else {
+        resultProjects = mapProjectsApiToTrophyList(projectsRes?.data)
+          .filter((p) => projectTitleOrDescriptionMatchesQuery(p, q))
+          .slice(0, 8);
+      }
+      setGlobeSearchResultUsers([]);
+      setGlobeSearchResultPosts([]);
+      setGlobeSearchResultProjects(resultProjects);
       setGlobeSearchResultOpen(true);
       setGlobeSearchOpen(false);
     } catch {
@@ -999,7 +1169,7 @@ export default function EarthCommunity() {
       setGlobeSearchResultOpen(true);
       setGlobeSearchOpen(false);
     }
-  }, [globeSearchQ]);
+  }, [globeSearchQ, globeSearchScope, me]);
 
   useLayoutEffect(() => {
     const st = initialRouteStateRef.current;
@@ -1690,70 +1860,154 @@ export default function EarthCommunity() {
       />
 
       <div ref={globeSearchWrapRef} style={globeSearchWrapStyle}>
-        {globeSearchOpen && globeSearchDebounced && (globeSearchUsers.length > 0 || globeSearchPosts.length > 0 || globeSearchProjects.length > 0) ? (
-          <div style={globeChrome.searchSuggest}>
-            {globeSearchUsers.length > 0 ? (
-              <div style={globeSearchSectionStyle}>
+        {globeSearchOpen &&
+        !globeSearchResultOpen &&
+        globeSearchDebounced &&
+        ((globeSearchScope === "user" && globeSearchUsers.length > 0) ||
+          (globeSearchScope === "post" && globeSearchPosts.length > 0) ||
+          (globeSearchScope === "trophy" && globeSearchProjects.length > 0)) ? (
+          <div style={globeChrome.searchSuggest} className="feed-card">
+            {globeSearchScope === "user" && globeSearchUsers.length > 0 ? (
+              <div style={globeSearchSectionStyle} role="group" aria-label="유저">
                 <div style={globeChrome.searchSectionTitle}>유저</div>
-                {globeSearchUsers.map((u) => (
-                  <button
-                    key={`u-${u.user_id}`}
-                    type="button"
-                    style={globeChrome.searchItemBtn}
-                    className="globe-search-hit"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => moveToSearchedUser(u)}
-                  >
-                    {u.nickname}
-                  </button>
-                ))}
+                {globeSearchUsers.map((u) => {
+                  const selfRow = Boolean(me && Number(me.user_id) === Number(u.user_id));
+                  const showFollowBtn = Boolean(me) && !selfRow;
+                  const iFollow = followingIdSet.has(Number(u.user_id));
+                  const busy =
+                    globeSearchFollowMut.isPending &&
+                    Number(globeSearchFollowMut.variables?.userId) === Number(u.user_id);
+                  const showUnfollowPreview = iFollow && globeSearchHoverUnfollowUserId === u.user_id;
+                  let followSrc = followIcon;
+                  let followLabel = "팔로우";
+                  if (busy) {
+                    if (globeSearchFollowMut.variables?.doFollow) {
+                      followSrc = followingIcon;
+                      followLabel = "처리 중…";
+                    } else {
+                      followSrc = unfollowIcon;
+                      followLabel = "처리 중…";
+                    }
+                  } else if (iFollow) {
+                    followSrc = showUnfollowPreview ? unfollowIcon : followingIcon;
+                    followLabel = showUnfollowPreview ? "언팔로우" : "팔로잉";
+                  }
+                  return (
+                    <div
+                      key={u.user_id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        width: "100%",
+                        padding: "0.35rem 0.65rem",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className="feed-hashtag-suggest-btn globe-search-hit"
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          width: "auto",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                          border: "none",
+                          background: "transparent",
+                          cursor: "pointer",
+                          textAlign: "left",
+                          borderRadius: 8,
+                          fontSize: "0.78rem",
+                          color: "inherit",
+                        }}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => moveToSearchedUser(u)}
+                      >
+                        {u.avatar_url ? (
+                          <img
+                            src={u.avatar_url}
+                            alt=""
+                            width={40}
+                            height={40}
+                            style={{ borderRadius: "50%", objectFit: "cover", flexShrink: 0 }}
+                            decoding="async"
+                          />
+                        ) : (
+                          <div
+                            className="feed-avatar feed-avatar-sm"
+                            style={{ width: 40, height: 40, flexShrink: 0 }}
+                            aria-hidden
+                          />
+                        )}
+                        <span className="feed-sidebar-search-user-nick">{u.nickname}</span>
+                      </button>
+                      {showFollowBtn ? (
+                        <button
+                          type="button"
+                          style={{
+                            flexShrink: 0,
+                            padding: 0,
+                            border: "none",
+                            background: "transparent",
+                            cursor: busy ? "wait" : "pointer",
+                            borderRadius: "50%",
+                            lineHeight: 0,
+                            opacity: busy ? 0.55 : 1,
+                          }}
+                          aria-label={followLabel}
+                          title={followLabel}
+                          disabled={busy}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            globeSearchFollowMut.mutate({ userId: u.user_id, doFollow: !iFollow });
+                          }}
+                          onMouseEnter={() => iFollow && setGlobeSearchHoverUnfollowUserId(u.user_id)}
+                          onMouseLeave={() =>
+                            setGlobeSearchHoverUnfollowUserId((cur) =>
+                              Number(cur) === Number(u.user_id) ? null : cur,
+                            )
+                          }
+                        >
+                          <img src={followSrc} alt="" width={36} height={36} style={{ display: "block" }} decoding="async" />
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
               </div>
             ) : null}
-            {globeSearchPosts.length > 0 ? (
-              <div style={globeSearchSectionStyle}>
-                <div style={globeChrome.searchSectionTitle}>피드 게시글</div>
-                {globeSearchPosts.map((p) => (
-                  <button
-                    key={`p-${p.post_id}`}
-                    type="button"
-                    style={globeChrome.searchItemBtn}
-                    className="globe-search-hit"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      setGlobePostModalId(String(p.post_id));
-                      setGlobeSearchOpen(false);
-                    }}
-                  >
-                    {p.author_nickname ? `${p.author_nickname} · ` : ""}
-                    {buildSearchSnippet(p.snippet)}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            {globeSearchProjects.length > 0 ? (
-              <div style={globeSearchSectionStyle}>
+            {globeSearchScope === "trophy" && globeSearchProjects.length > 0 ? (
+              <div style={globeSearchSectionStyle} role="group" aria-label="트로피 프로젝트">
                 <div style={globeChrome.searchSectionTitle}>트로피 프로젝트</div>
-                {globeSearchProjects.map((p) => (
-                  <button
-                    key={`t-${p.id}`}
-                    type="button"
-                    style={globeChrome.searchItemBtn}
-                    className="globe-search-hit"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={async () => {
-                      try {
-                        const { data } = await api.get("/projects/community", { params: { sort: "latest" } });
-                        const found = mapProjectsApiToTrophyList(data).find((x) => Number(x.id) === Number(p.id));
-                        if (found) setGlobeProjectPreview(found);
-                      } catch {
-                        /* ignore */
-                      }
+                {globeSearchProjects.map((p) => {
+                  const pid = p.project_id ?? p.id;
+                  return (
+                    <SearchAutocompleteProjectRow
+                      key={`t-${pid}`}
+                      row={p}
+                      gradeImgMap={GLOBE_SEARCH_GRADE_IMG}
+                      extraButtonClassName="globe-search-hit"
+                      onPick={() => openGlobeSearchProjectById(pid)}
+                    />
+                  );
+                })}
+              </div>
+            ) : null}
+            {globeSearchScope === "post" && globeSearchPosts.length > 0 ? (
+              <div style={globeSearchSectionStyle} role="group" aria-label="피드 게시글">
+                <div style={globeChrome.searchSectionTitle}>피드 게시글</div>
+                {globeSearchPosts.map((dto) => (
+                  <SearchAutocompletePostRow
+                    key={`p-${dto.post_id ?? dto.id}`}
+                    dto={dto}
+                    extraButtonClassName="globe-search-hit"
+                    onPick={(postId) => {
+                      setGlobePostModalId(String(postId));
                       setGlobeSearchOpen(false);
                     }}
-                  >
-                    {p.author ? `${p.author} · ` : ""}
-                    {p.title}
-                  </button>
+                  />
                 ))}
               </div>
             ) : null}
@@ -1761,13 +2015,22 @@ export default function EarthCommunity() {
         ) : null}
         <div style={globeChrome.searchBar}>
           <input
+            ref={globeSearchInputRef}
             type="search"
             value={globeSearchQ}
-            placeholder="유저/피드/트로피 검색"
+            placeholder={
+              globeSearchScope === "user"
+                ? "유저 검색"
+                : globeSearchScope === "post"
+                  ? "게시글 검색"
+                  : "트로피 프로젝트 검색"
+            }
             className="globe-search-input"
             style={globeChrome.searchInput}
             onChange={(e) => setGlobeSearchQ(e.target.value)}
-            onFocus={() => setGlobeSearchOpen(true)}
+            onFocus={() => {
+              if (!globeSearchResultOpen) setGlobeSearchOpen(true);
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
@@ -1775,6 +2038,23 @@ export default function EarthCommunity() {
               }
             }}
           />
+          <label style={globeChrome.searchScopeLabel}>
+            <span>기준</span>
+            <select
+              value={globeSearchScope}
+              aria-label="검색 기준"
+              style={globeChrome.searchScopeSelect}
+              onMouseDown={(e) => e.stopPropagation()}
+              onChange={(e) => {
+                setGlobeSearchScope(e.target.value);
+                if (!globeSearchResultOpen) setGlobeSearchOpen(true);
+              }}
+            >
+              <option value="user">유저</option>
+              <option value="post">게시글</option>
+              <option value="trophy">트로피</option>
+            </select>
+          </label>
           <button type="button" style={globeSearchBtnStyle} onClick={() => void openGlobeSearchResults()}>
             이동
           </button>
@@ -1850,40 +2130,133 @@ export default function EarthCommunity() {
             {globeSearchResultUsers.length > 0 ? (
               <div style={globeSearchSectionStyle}>
                 <div style={globeChrome.searchSectionTitle}>유저</div>
-                {globeSearchResultUsers.map((u) => (
-                  <button
-                    key={`ru-${u.user_id ?? u.id}`}
-                    type="button"
-                    style={globeChrome.searchItemBtn}
-                    className="globe-search-hit"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      moveToSearchedUser(u);
-                      setGlobeSearchResultOpen(false);
-                    }}
-                  >
-                    {u.nickname || `유저 #${u.user_id ?? u.id}`}
-                  </button>
-                ))}
+                {globeSearchResultUsers.map((u) => {
+                  const uid = u.user_id ?? u.id;
+                  const selfRow = Boolean(me && Number(me.user_id) === Number(uid));
+                  const showFollowBtn = Boolean(me) && !selfRow;
+                  const iFollow = followingIdSet.has(Number(uid));
+                  const busy =
+                    globeSearchFollowMut.isPending &&
+                    Number(globeSearchFollowMut.variables?.userId) === Number(uid);
+                  const showUnfollowPreview = iFollow && globeSearchHoverUnfollowUserId === uid;
+                  let followSrc = followIcon;
+                  let followLabel = "팔로우";
+                  if (busy) {
+                    if (globeSearchFollowMut.variables?.doFollow) {
+                      followSrc = followingIcon;
+                      followLabel = "처리 중…";
+                    } else {
+                      followSrc = unfollowIcon;
+                      followLabel = "처리 중…";
+                    }
+                  } else if (iFollow) {
+                    followSrc = showUnfollowPreview ? unfollowIcon : followingIcon;
+                    followLabel = showUnfollowPreview ? "언팔로우" : "팔로잉";
+                  }
+                  return (
+                    <div
+                      key={`ru-${uid}`}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        width: "100%",
+                        padding: "0.35rem 0.65rem",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className="feed-hashtag-suggest-btn globe-search-hit"
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          width: "auto",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                          border: "none",
+                          background: "transparent",
+                          cursor: "pointer",
+                          textAlign: "left",
+                          borderRadius: 8,
+                          fontSize: "0.78rem",
+                          color: "inherit",
+                        }}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          moveToSearchedUser(u);
+                          setGlobeSearchResultOpen(false);
+                        }}
+                      >
+                        {u.avatar_url ? (
+                          <img
+                            src={u.avatar_url}
+                            alt=""
+                            width={40}
+                            height={40}
+                            style={{ borderRadius: "50%", objectFit: "cover", flexShrink: 0 }}
+                            decoding="async"
+                          />
+                        ) : (
+                          <div
+                            className="feed-avatar feed-avatar-sm"
+                            style={{ width: 40, height: 40, flexShrink: 0 }}
+                            aria-hidden
+                          />
+                        )}
+                        <span className="feed-sidebar-search-user-nick">
+                          {u.nickname || `유저 #${uid}`}
+                        </span>
+                      </button>
+                      {showFollowBtn ? (
+                        <button
+                          type="button"
+                          style={{
+                            flexShrink: 0,
+                            padding: 0,
+                            border: "none",
+                            background: "transparent",
+                            cursor: busy ? "wait" : "pointer",
+                            borderRadius: "50%",
+                            lineHeight: 0,
+                            opacity: busy ? 0.55 : 1,
+                          }}
+                          aria-label={followLabel}
+                          title={followLabel}
+                          disabled={busy}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            globeSearchFollowMut.mutate({ userId: uid, doFollow: !iFollow });
+                          }}
+                          onMouseEnter={() => iFollow && setGlobeSearchHoverUnfollowUserId(uid)}
+                          onMouseLeave={() =>
+                            setGlobeSearchHoverUnfollowUserId((cur) =>
+                              Number(cur) === Number(uid) ? null : cur,
+                            )
+                          }
+                        >
+                          <img src={followSrc} alt="" width={36} height={36} style={{ display: "block" }} decoding="async" />
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
               </div>
             ) : null}
             {globeSearchResultPosts.length > 0 ? (
               <div style={globeSearchSectionStyle}>
                 <div style={globeChrome.searchSectionTitle}>피드 게시글</div>
                 {globeSearchResultPosts.map((p) => (
-                  <button
-                    key={`rp-${p.id}`}
-                    type="button"
-                    style={globeChrome.searchItemBtn}
-                    className="globe-search-hit"
-                    onClick={() => {
-                      setGlobePostModalId(String(p.id));
+                  <SearchAutocompletePostRow
+                    key={`rp-${p.post_id ?? p.id}`}
+                    dto={p}
+                    extraButtonClassName="globe-search-hit"
+                    onPick={(postId) => {
+                      setGlobePostModalId(String(postId));
                       setGlobeSearchResultOpen(false);
                     }}
-                  >
-                    {p.author ? `${p.author} · ` : ""}
-                    {p.snippet || "게시글"}
-                  </button>
+                  />
                 ))}
               </div>
             ) : null}
@@ -1891,19 +2264,16 @@ export default function EarthCommunity() {
               <div style={globeSearchSectionStyle}>
                 <div style={globeChrome.searchSectionTitle}>트로피 프로젝트</div>
                 {globeSearchResultProjects.map((p) => (
-                  <button
+                  <SearchAutocompleteProjectRow
                     key={`rt-${p.id}`}
-                    type="button"
-                    style={globeChrome.searchItemBtn}
-                    className="globe-search-hit"
-                    onClick={() => {
+                    row={p}
+                    gradeImgMap={GLOBE_SEARCH_GRADE_IMG}
+                    extraButtonClassName="globe-search-hit"
+                    onPick={() => {
                       setGlobeProjectPreview(p);
                       setGlobeSearchResultOpen(false);
                     }}
-                  >
-                    {p.authorNickname ? `${p.authorNickname} · ` : ""}
-                    {p.title}
-                  </button>
+                  />
                 ))}
               </div>
             ) : null}
@@ -3998,7 +4368,7 @@ const globeSearchWrapStyle = {
   position: "absolute",
   right: 14,
   bottom: 18,
-  width: 356,
+  width: 384,
   zIndex: 22,
 };
 
@@ -4029,9 +4399,9 @@ const globeSearchBtnStyle = {
   background: "#3b82f6",
   color: "#fff",
   fontWeight: 700,
-  fontSize: "0.78rem",
+  fontSize: "0.8rem",
   borderRadius: 8,
-  padding: "8px 12px",
+  padding: "11px 14px",
   cursor: "pointer",
   whiteSpace: "nowrap",
 };
@@ -4079,8 +4449,8 @@ const globeSearchItemBtnStyle = {
 const globeSearchResultPopupStyle = {
   position: "absolute",
   right: 14,
-  bottom: 74,
-  width: 356,
+  bottom: 100,
+  width: 384,
   maxHeight: 300,
   display: "flex",
   flexDirection: "column",
