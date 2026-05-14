@@ -67,4 +67,68 @@ router.get('/', async (req, res) => {
   }
 });
 
+// GET /api/stats/featured
+// 6시간마다 갱신되는 랜덤 유저 2명 — 오늘 커밋 횟수 포함 (0이면 0으로 표시)
+let featuredCache = { users: [], expiresAt: 0 };
+
+router.get('/featured', async (req, res) => {
+  try {
+    // 캐시가 유효하면 그대로 반환
+    if (Date.now() < featuredCache.expiresAt) {
+      return res.json(featuredCache.users);
+    }
+
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+
+    // 전체 가입 유저 수 조회
+    const totalCount = await prisma.user.count({ where: { is_deleted: false } });
+    if (totalCount === 0) return res.json([]);
+
+    // 랜덤 offset 2개로 유저 뽑기
+    const offsets = [];
+    while (offsets.length < Math.min(2, totalCount)) {
+      const r = Math.floor(Math.random() * totalCount);
+      if (!offsets.includes(r)) offsets.push(r);
+    }
+
+    const picked = await Promise.all(offsets.map(skip =>
+      prisma.user.findFirst({
+        where: { is_deleted: false },
+        skip,
+        select: { user_id: true, nickname: true },
+      })
+    ));
+
+    // 각 유저의 오늘 커밋 횟수 조회 (없으면 0)
+    const users = await Promise.all(picked.filter(Boolean).map(async (u) => {
+      const [streak, techStacks] = await Promise.all([
+        prisma.codingStreak.findFirst({
+          where: { user_id: u.user_id, last_reset_date: { gte: todayStart, lte: todayEnd } },
+          select: { today_commit_count: true },
+        }),
+        prisma.userTechStack.findMany({
+          where: { user_id: u.user_id },
+          select: { stack_name: true },
+          take: 2,
+        }),
+      ]);
+      return {
+        nickname: u.nickname,
+        commitCount: streak?.today_commit_count ?? 0,
+        techStacks: techStacks.map(t => t.stack_name),
+      };
+    }));
+
+    // 6시간 캐시 저장
+    featuredCache = { users, expiresAt: Date.now() + 6 * 60 * 60 * 1000 };
+    res.json(users);
+  } catch (err) {
+    console.error('[Featured Error]', err.message);
+    res.status(500).json({ message: '서버 오류' });
+  }
+});
+
 module.exports = router;
