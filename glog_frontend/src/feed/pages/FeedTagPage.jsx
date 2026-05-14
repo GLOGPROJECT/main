@@ -1,37 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
+import { useAuth } from '../../auth/hooks/useAuth';
 import FeedTabs from '../components/FeedTabs';
 import FeedSortAndTheme from '../components/FeedSortAndTheme';
 import FeedList from '../components/FeedList';
 import HashtagSearchBar from '../components/HashtagSearchBar';
 import RegisteredHashtagDirectory from '../components/RegisteredHashtagDirectory';
 import { getTagPillColors } from '../utils/tagPillColors';
-
-const SUB_LS = 'glog:hashtag-subscribe-v1';
-const MAX_TAG_SUBS = 5;
+import { MAX_TAG_SUBS, readSubscribedTagSlugs, writeSubscribedTagSlugs } from '../utils/tagSubscribeStorage';
 
 const VIEW_POPULAR = 'popular';
 const VIEW_LATEST = 'latest';
 const VIEW_FEED = 'feed';
-
-function readSubscribedSlugs() {
-  try {
-    const raw = localStorage.getItem(SUB_LS);
-    const arr = raw ? JSON.parse(raw) : [];
-    return Array.isArray(arr) ? arr.map((s) => String(s)) : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeSubscribedSlugs(list) {
-  try {
-    localStorage.setItem(SUB_LS, JSON.stringify(list.slice(0, MAX_TAG_SUBS)));
-    window.dispatchEvent(new CustomEvent('glog:tag-subs-changed'));
-  } catch {
-    /* ignore */
-  }
-}
 
 function formatCompactPostCount(n) {
   const x = Math.max(0, Math.floor(Number(n) || 0));
@@ -48,11 +28,13 @@ function normalizeTagView(v) {
 
 export default function FeedTagPage() {
   const { slug } = useParams();
+  const { user } = useAuth();
+  const uid = user?.user_id;
   const [searchParams, setSearchParams] = useSearchParams();
   const decoded = slug ? decodeURIComponent(slug) : '';
   const view = normalizeTagView(searchParams.get('view'));
   const [toast, setToast] = useState(null);
-  const [subs, setSubs] = useState(() => readSubscribedSlugs());
+  const [subs, setSubs] = useState(() => readSubscribedTagSlugs(uid));
   const [tagMeta, setTagMeta] = useState(undefined);
 
   const setView = useCallback(
@@ -70,8 +52,15 @@ export default function FeedTagPage() {
   );
 
   useEffect(() => {
-    setSubs(readSubscribedSlugs());
-  }, [slug]);
+    setSubs(readSubscribedTagSlugs(uid));
+    const sync = () => setSubs(readSubscribedTagSlugs(uid));
+    window.addEventListener('glog:tag-subs-changed', sync);
+    window.addEventListener('storage', sync);
+    return () => {
+      window.removeEventListener('glog:tag-subs-changed', sync);
+      window.removeEventListener('storage', sync);
+    };
+  }, [slug, uid]);
 
   useLayoutEffect(() => {
     setTagMeta(undefined);
@@ -105,11 +94,15 @@ export default function FeedTagPage() {
   const toggleSubscribe = useCallback(() => {
     const key = decoded.trim();
     if (!key) return;
+    if (!uid) {
+      showToast('로그인 후 태그를 구독할 수 있어요');
+      return;
+    }
 
     if (isSubscribed) {
       const next = subs.filter((s) => s.toLowerCase() !== key.toLowerCase());
       setSubs(next);
-      writeSubscribedSlugs(next);
+      writeSubscribedTagSlugs(next, uid);
       return;
     }
 
@@ -120,8 +113,8 @@ export default function FeedTagPage() {
 
     const next = [...subs, key];
     setSubs(next);
-    writeSubscribedSlugs(next);
-  }, [decoded, isSubscribed, subs, showToast]);
+    writeSubscribedTagSlugs(next, uid);
+  }, [decoded, isSubscribed, subs, showToast, uid]);
 
   const onTagFeedMeta = useCallback((h) => {
     setTagMeta(h);

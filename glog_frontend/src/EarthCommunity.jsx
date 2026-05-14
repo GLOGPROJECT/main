@@ -46,6 +46,8 @@ import { fetchSearchAutocomplete } from "./feed/api/searchApi";
 import { streakBadgeEmoji } from "./utils/streakBadgeEmoji";
 import { countTrophiesByGrade } from "./utils/trophyGradeCounts";
 import ProjectRegisterModal from "./feed/components/ProjectRegisterModal";
+import ProfileFeedPeekModal from "./feed/components/ProfileFeedPeekModal";
+import GuestModal from "./feed/components/GuestModal";
 import { LoginModalProvider } from "./feed/auth/LoginModalContext";
 import { useTrophyModal } from "./feed/trophy/TrophyModalContext";
 import { useFeedTheme } from "./feed/theme/ThemeContext";
@@ -552,6 +554,7 @@ const PROJECT_MODAL_TAG_PALETTE = [
 export default function EarthCommunity() {
   const [selectedUser, setSelectedUser] = useState(null);
   const [showShop, setShowShop] = useState(false);
+  const [guestGlobeLoginOpen, setGuestGlobeLoginOpen] = useState(false);
   const [showDailyReward, setShowDailyReward] = useState(false);
   const [dailyRewardAmount, setDailyRewardAmount] = useState(700);
   // 랜딩 페이지와 동일한 상단 메뉴 active 상태
@@ -608,6 +611,7 @@ export default function EarthCommunity() {
   const [globeSearchPosts, setGlobeSearchPosts] = useState([]);
   const [globeSearchProjects, setGlobeSearchProjects] = useState([]);
   const [globeSearchResultOpen, setGlobeSearchResultOpen] = useState(false);
+  const [globeSearchResultUsers, setGlobeSearchResultUsers] = useState([]);
   const [globeSearchResultPosts, setGlobeSearchResultPosts] = useState([]);
   const [globeSearchResultProjects, setGlobeSearchResultProjects] = useState([]);
   const globeSearchWrapRef = useRef(null);
@@ -963,10 +967,12 @@ export default function EarthCommunity() {
     const q = normalizeGlobeSearchKeyword(globeSearchQ);
     if (!q) return;
     try {
-      const [postRes, projectsRes] = await Promise.all([
+      const [autoRes, postRes, projectsRes] = await Promise.all([
+        fetchSearchAutocomplete(q).catch(() => ({ users: [], suggestions: [] })),
         api.get("/search", { params: { type: "post", q, limit: 8 } }).catch(() => ({ data: { posts: [] } })),
         api.get("/projects/community", { params: { sort: "latest" } }).catch(() => ({ data: { items: [] } })),
       ]);
+      const users = Array.isArray(autoRes?.users) ? autoRes.users.slice(0, 8) : [];
       const posts = (Array.isArray(postRes?.data?.posts) ? postRes.data.posts : []).map((p) => ({
         id: p.post_id,
         author: String(p?.user?.nickname ?? "").trim(),
@@ -981,11 +987,13 @@ export default function EarthCommunity() {
           return title.includes(lowQ) || desc.includes(lowQ) || author.includes(lowQ);
         })
         .slice(0, 8);
+      setGlobeSearchResultUsers(users);
       setGlobeSearchResultPosts(posts);
       setGlobeSearchResultProjects(projects);
       setGlobeSearchResultOpen(true);
       setGlobeSearchOpen(false);
     } catch {
+      setGlobeSearchResultUsers([]);
       setGlobeSearchResultPosts([]);
       setGlobeSearchResultProjects([]);
       setGlobeSearchResultOpen(true);
@@ -1001,21 +1009,31 @@ export default function EarthCommunity() {
 
   useEffect(() => {
     if (location.state?.openShop !== true) return;
+    if (!me) {
+      setGuestGlobeLoginOpen(true);
+      navigate(location.pathname, { replace: true, state: {} });
+      return;
+    }
     closeTrophyModal();
     setShowShop(true);
     setActiveNav("상점");
     navigate(location.pathname, { replace: true, state: {} });
-  }, [location.state, location.pathname, navigate, closeTrophyModal]);
+  }, [location.state, location.pathname, navigate, closeTrophyModal, me]);
 
   useEffect(() => {
     if (location.state?.openTrophy !== true) return;
+    if (!me) {
+      setGuestGlobeLoginOpen(true);
+      navigate(location.pathname, { replace: true, state: {} });
+      return;
+    }
     setShowShop(false);
     setActiveNav("트로피");
     const pid = location.state?.openProjectId;
     const n = pid != null ? Number(pid) : NaN;
     openTrophyModal(Number.isFinite(n) && n > 0 ? { projectId: n } : undefined);
     navigate(location.pathname, { replace: true, state: {} });
-  }, [location.state, location.pathname, navigate, openTrophyModal]);
+  }, [location.state, location.pathname, navigate, openTrophyModal, me]);
 
   useEffect(() => {
     if (wasTrophyModalOpenRef.current && !isTrophyModalOpen) {
@@ -1025,7 +1043,13 @@ export default function EarthCommunity() {
   }, [isTrophyModalOpen]);
 
   useEffect(() => {
-    if (location.state?.openMyProfile !== true || !buildMePanelUser) return;
+    if (location.state?.openMyProfile !== true) return;
+    if (!me) {
+      setGuestGlobeLoginOpen(true);
+      navigate(location.pathname, { replace: true, state: {} });
+      return;
+    }
+    if (!buildMePanelUser) return;
     markerClickedRef.current = true;
     setActiveNav("프로필");
     setSelectedUser(buildMePanelUser);
@@ -1037,7 +1061,7 @@ export default function EarthCommunity() {
       });
     });
     navigate(location.pathname, { replace: true, state: {} });
-  }, [location.state, location.pathname, buildMePanelUser, navigate]);
+  }, [location.state, location.pathname, buildMePanelUser, navigate, me]);
 
   useEffect(() => {
     if (!globePostModalId) {
@@ -1472,15 +1496,17 @@ export default function EarthCommunity() {
           >
             GLog 🌍
           </div>
-          <button
-            type="button"
-            className="feed-theme-toggle-btn"
-            onClick={toggleTheme}
-            title={theme === 'dark' ? '밝게' : '야간'}
-            aria-label={theme === 'dark' ? '라이트 모드' : '다크 모드'}
-          >
-            {theme === 'dark' ? '☀' : '🌙'}
-          </button>
+          {me ? (
+            <button
+              type="button"
+              className="feed-theme-toggle-btn"
+              onClick={toggleTheme}
+              title={theme === 'dark' ? '밝게' : '야간'}
+              aria-label={theme === 'dark' ? '라이트 모드' : '다크 모드'}
+            >
+              {theme === 'dark' ? '☀' : '🌙'}
+            </button>
+          ) : null}
         </div>
         {/* 메뉴 버튼 목록 - 랜딩과 동일한 항목 */}
         <div style={{ display: 'flex', gap: '40px' }}>
@@ -1490,37 +1516,47 @@ export default function EarthCommunity() {
               className={`globe-nav-item${activeNav === item ? ' active' : ''}`}
               onClick={async () => {
                 if (item === '프로필') {
-                  setActiveNav('프로필');
-                  if (me) {
-                    const lat = parseGlobeCoord(me.globe_lat, 37.56);
-                    const lon = parseGlobeCoord(me.globe_lon, 126.97);
-                    dragRef.current.pausedUntil = Date.now() + 4000;
-                    markerClickedRef.current = true;
-                    setSelectedUser({
-                      id: me.user_id,
-                      name: me.nickname,
-                      bio: me.bio || '',
-                      color: '#4e9af1',
-                      avatar: me.model_url || pickAvatarByUserId(me.user_id),
-                      avatar_url: me.avatar_url,
-                      lat,
-                      lon,
-                      status: me.status || 'offline',
-                      isMe: true,
-                    });
-                    requestAnimationFrame(() => {
-                      requestAnimationFrame(() => {
-                        snapEarthGroupTowardCamera(earthRef, lat, lon);
-                      });
-                    });
+                  if (!me) {
+                    setGuestGlobeLoginOpen(true);
+                    return;
                   }
+                  setActiveNav('프로필');
+                  const lat = parseGlobeCoord(me.globe_lat, 37.56);
+                  const lon = parseGlobeCoord(me.globe_lon, 126.97);
+                  dragRef.current.pausedUntil = Date.now() + 4000;
+                  markerClickedRef.current = true;
+                  setSelectedUser({
+                    id: me.user_id,
+                    name: me.nickname,
+                    bio: me.bio || '',
+                    color: '#4e9af1',
+                    avatar: me.model_url || pickAvatarByUserId(me.user_id),
+                    avatar_url: me.avatar_url,
+                    lat,
+                    lon,
+                    status: me.status || 'offline',
+                    isMe: true,
+                  });
+                  requestAnimationFrame(() => {
+                    requestAnimationFrame(() => {
+                      snapEarthGroupTowardCamera(earthRef, lat, lon);
+                    });
+                  });
                 } else if (item === '피드') {
                   navigate('/feed', { state: { feedRouteEnter: true } });
                 } else if (item === '트로피') {
+                  if (!me) {
+                    setGuestGlobeLoginOpen(true);
+                    return;
+                  }
                   setShowShop(false);
                   setActiveNav('트로피');
                   openTrophyModal();
                 } else if (item === '상점') {
+                  if (!me) {
+                    setGuestGlobeLoginOpen(true);
+                    return;
+                  }
                   closeTrophyModal();
                   setActiveNav('상점');
                   setShowShop(true);
@@ -1582,6 +1618,8 @@ export default function EarthCommunity() {
         </button>
       )}
 
+      <GuestModal open={guestGlobeLoginOpen} onClose={() => setGuestGlobeLoginOpen(false)} />
+
       {/* 펫 상점 모달 */}
       {showShop && (
         <PetShopModal
@@ -1635,6 +1673,20 @@ export default function EarthCommunity() {
           });
         }}
         onOpenProject={(p) => setGlobeProjectPreview(p)}
+        onGlobePeekOpenTrophyProject={(projectId) => {
+          const n = Number(projectId);
+          if (!Number.isFinite(n) || n <= 0) return;
+          if (!me) {
+            setGuestGlobeLoginOpen(true);
+            return;
+          }
+          setShowShop(false);
+          setActiveNav('트로피');
+          openTrophyModal({ projectId: n });
+        }}
+        onGlobePeekFocusGlobeUser={(u) => {
+          moveToSearchedUser({ user_id: u.user_id, id: u.user_id });
+        }}
       />
 
       <div ref={globeSearchWrapRef} style={globeSearchWrapStyle}>
@@ -1795,6 +1847,26 @@ export default function EarthCommunity() {
             </button>
           </div>
           <div style={globeChrome.searchResultBody}>
+            {globeSearchResultUsers.length > 0 ? (
+              <div style={globeSearchSectionStyle}>
+                <div style={globeChrome.searchSectionTitle}>유저</div>
+                {globeSearchResultUsers.map((u) => (
+                  <button
+                    key={`ru-${u.user_id ?? u.id}`}
+                    type="button"
+                    style={globeChrome.searchItemBtn}
+                    className="globe-search-hit"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      moveToSearchedUser(u);
+                      setGlobeSearchResultOpen(false);
+                    }}
+                  >
+                    {u.nickname || `유저 #${u.user_id ?? u.id}`}
+                  </button>
+                ))}
+              </div>
+            ) : null}
             {globeSearchResultPosts.length > 0 ? (
               <div style={globeSearchSectionStyle}>
                 <div style={globeChrome.searchSectionTitle}>피드 게시글</div>
@@ -1835,7 +1907,9 @@ export default function EarthCommunity() {
                 ))}
               </div>
             ) : null}
-            {globeSearchResultPosts.length === 0 && globeSearchResultProjects.length === 0 ? (
+            {globeSearchResultUsers.length === 0 &&
+            globeSearchResultPosts.length === 0 &&
+            globeSearchResultProjects.length === 0 ? (
               <p style={{ margin: 0, color: "#94a3b8", fontSize: "0.78rem" }}>연관 검색 결과가 없습니다.</p>
             ) : null}
           </div>
@@ -2498,7 +2572,7 @@ const TECH_STACK_OPTIONS = [
 
 // hasNewDm, hasNewNotif: 새 메시지·알림 여부 → true면 아이콘 왼쪽 하단에 빨간 점 표시
 // onDmClick / onNotifClick: 아이콘 클릭 시 부모에서 읽음 처리
-function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNewDm = false, hasNewNotif = false, onDmClick, onNotifClick, onSendDm, onOpenFeedPost, onViewMorePosts, onOpenProject, trophyRefreshKey = 0, postListRefreshKey = 0, onPostLikeUpdated }) {
+function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNewDm = false, hasNewNotif = false, onDmClick, onNotifClick, onSendDm, onOpenFeedPost, onViewMorePosts, onOpenProject, trophyRefreshKey = 0, postListRefreshKey = 0, onPostLikeUpdated, onGlobePeekOpenTrophyProject, onGlobePeekFocusGlobeUser }) {
   const navigate = useNavigate();
   const open = !!user;
 
@@ -2528,6 +2602,8 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
   const likesLoadMoreLockRef = useRef(false);
   const likesScrollRootRef = useRef(null);
   const likesSentinelRef = useRef(null);
+  /** 통계 4칸 클릭 시 피드 패널 미리보기(작은 오버레이) */
+  const [feedPeek, setFeedPeek] = useState(null);
 
   const applyProjectsResponse = useCallback((data) => {
     const items = Array.isArray(data?.items) ? data.items : [];
@@ -2541,6 +2617,10 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
     });
     setTrophiesLoad('ok');
   }, []);
+
+  useEffect(() => {
+    setFeedPeek(null);
+  }, [user?.id]);
 
   useEffect(() => {
     if (!user?.id) {
@@ -3033,15 +3113,14 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
 
             <hr style={{ border: 'none', borderTop: '1px solid var(--feed-border)', margin: '0 0 8px' }} />
 
-            {/* 통계: 커밋 스트릭 | 프로젝트 | 팔로우 중 | 팔로워 — 클릭 시 피드 유저 탭으로 이동 */}
+            {/* 통계: 커밋 스트릭 | 프로젝트 | 팔로우 중 | 팔로워 — 클릭 시 피드와 동일 패널 팝업 */}
             <div style={{ display: 'flex', alignItems: 'stretch', marginBottom: 8 }}>
               <button
                 type="button"
                 className="profile-stat-tap"
                 style={{ flex: 1, textAlign: 'center', minWidth: 0, background: 'none', border: 'none', padding: '4px 2px', cursor: 'pointer', color: 'inherit' }}
                 onClick={() => {
-                  onClose();
-                  navigate(`/feed/user/${Number(d.id)}?tab=streak`, { state: { nickname: d.name } });
+                  setFeedPeek({ userId: Number(d.id), tab: 'streak' });
                 }}
               >
                 <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#f59e0b' }}>{d.current_streak}</div>
@@ -3053,8 +3132,7 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
                 className="profile-stat-tap"
                 style={{ flex: 1, textAlign: 'center', minWidth: 0, background: 'none', border: 'none', padding: '4px 2px', cursor: 'pointer', color: 'inherit' }}
                 onClick={() => {
-                  onClose();
-                  navigate(`/feed/user/${Number(d.id)}?tab=projects`, { state: { nickname: d.name } });
+                  setFeedPeek({ userId: Number(d.id), tab: 'projects' });
                 }}
               >
                 <div style={{ fontSize: '0.98rem', fontWeight: 800, color: 'var(--feed-text-primary)' }}>
@@ -3074,8 +3152,7 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
                 className="profile-stat-tap"
                 style={{ flex: 1, textAlign: 'center', minWidth: 0, background: 'none', border: 'none', padding: '4px 2px', cursor: 'pointer', color: 'inherit' }}
                 onClick={() => {
-                  onClose();
-                  navigate(`/feed/user/${Number(d.id)}?tab=following`, { state: { nickname: d.name } });
+                  setFeedPeek({ userId: Number(d.id), tab: 'following' });
                 }}
               >
                 <div style={{ fontSize: '0.98rem', fontWeight: 800, color: 'var(--feed-text-primary)' }}>{d.following_count}</div>
@@ -3087,8 +3164,7 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
                 className="profile-stat-tap"
                 style={{ flex: 1, textAlign: 'center', minWidth: 0, background: 'none', border: 'none', padding: '4px 2px', cursor: 'pointer', color: 'inherit' }}
                 onClick={() => {
-                  onClose();
-                  navigate(`/feed/user/${Number(d.id)}?tab=followers`, { state: { nickname: d.name } });
+                  setFeedPeek({ userId: Number(d.id), tab: 'followers' });
                 }}
               >
                 <div style={{ fontSize: '0.98rem', fontWeight: 800, color: 'var(--feed-text-primary)' }}>{d.follower_count}</div>
@@ -3877,6 +3953,14 @@ function UserPanel({ viewer, user, onClose, onViewProfile, onStatusChange, hasNe
           </div>
         </>
       )}
+      <ProfileFeedPeekModal
+        open={feedPeek != null}
+        onClose={() => setFeedPeek(null)}
+        userId={feedPeek?.userId}
+        tab={feedPeek?.tab}
+        onOpenTrophyProject={onGlobePeekOpenTrophyProject}
+        onFocusGlobeUser={onGlobePeekFocusGlobeUser}
+      />
     </aside>
   );
 }

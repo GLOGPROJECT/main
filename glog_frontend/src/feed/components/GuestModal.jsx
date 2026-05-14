@@ -7,13 +7,13 @@ function startGithubOAuth() {
 /**
  * @param {boolean} [isLoggedIn] — true면 로그인 유도 UI 없이 안내만 표시
  */
-export default function GuestModal({ open, onClose, onBrowseLater, browseEnabled = false, isLoggedIn = false }) {
+export default function GuestModal({ open, onClose, isLoggedIn = false }) {
   if (!open) return null;
 
   if (isLoggedIn) {
     return (
       <div
-        className="feed-modal-backdrop"
+        className="feed-modal-backdrop feed-modal-backdrop--guest"
         role="dialog"
         aria-modal="true"
         aria-labelledby="guide-title"
@@ -42,7 +42,7 @@ export default function GuestModal({ open, onClose, onBrowseLater, browseEnabled
 
   return (
     <div
-      className="feed-modal-backdrop"
+      className="feed-modal-backdrop feed-modal-backdrop--guest"
       role="dialog"
       aria-modal="true"
       aria-labelledby="guest-title"
@@ -57,21 +57,24 @@ export default function GuestModal({ open, onClose, onBrowseLater, browseEnabled
             계속하려면 로그인이 필요해요
           </h2>
           <p className="feed-post-meta" style={{ marginTop: '0.5rem' }}>GitHub 계정으로 바로 이어서 사용할 수 있어요.</p>
-          <button type="button" className="feed-btn-primary" style={{ marginTop: '1rem' }} onClick={startGithubOAuth}>
-            <span aria-hidden style={{ marginRight: '0.4rem' }}>🐙</span>
-            GitHub으로 로그인
-          </button>
-          <div style={{ marginTop: '1rem' }}>
-            <button type="button" className="feed-btn-outline" onClick={onBrowseLater} disabled={!browseEnabled}>
-              나중에 둘러보기
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'stretch',
+              gap: '0.75rem',
+              marginTop: '1rem',
+              width: '100%',
+            }}
+          >
+            <button type="button" className="feed-btn-primary" style={{ width: '100%' }} onClick={startGithubOAuth}>
+              <span aria-hidden style={{ marginRight: '0.4rem' }}>🐙</span>
+              GitHub으로 로그인
             </button>
-            <p className="feed-post-meta" style={{ marginTop: '0.35rem', fontSize: '0.7rem' }}>
-              {browseEnabled ? '지금은 모달을 닫고 둘러볼 수 있어요.' : '5초 후 활성화됩니다.'}
-            </p>
+            <button type="button" className="feed-modal-close" style={{ marginTop: 0, alignSelf: 'center', fontSize: '0.95rem' }} onClick={onClose}>
+              닫기
+            </button>
           </div>
-          <button type="button" className="feed-modal-close" style={{ marginTop: '1rem' }} onClick={onClose}>
-            닫기
-          </button>
         </div>
       </div>
     </div>
