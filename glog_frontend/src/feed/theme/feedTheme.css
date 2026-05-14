@@ -1441,6 +1441,13 @@ button.feed-post-author-link-btn {
   overflow-y: auto;
 }
 
+/* GuestModal — 랜딩 등에서 body 스크롤과 이중 스크롤 방지, 항상 최상단 클릭 */
+.feed-modal-backdrop.feed-modal-backdrop--guest {
+  z-index: 12000;
+  overflow-y: visible;
+  align-items: center;
+}
+
 .feed-modal {
   background: var(--feed-bg-card);
   color: var(--feed-text-primary);

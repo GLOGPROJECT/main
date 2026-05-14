@@ -268,13 +268,14 @@ export default function Landing() {
       <div style={{
         position: 'relative',
         width: '100%',
-        height: '100vh',
+        minHeight: '100vh',
         background: '#0f1c36',
-        overflow: 'hidden',
+        overflowX: 'hidden',
         color: 'white',
         fontFamily: 'sans-serif',
         display: 'flex',
         flexDirection: 'column',
+        paddingBottom: 'max(3rem, 12vh)',
       }}>
 
         {/* ── 별 배경 레이어 ──
@@ -299,7 +300,8 @@ export default function Landing() {
           />
         ))}
 
-        <div style={{ position: 'relative', zIndex: 1 }}>
+        {/* 네비+로그인 모달은 히어로(지구본)보다 위 레이어 — z-index 같으면 DOM 뒤쪽 히어로가 모달을 덮음 */}
+        <div style={{ position: 'relative', zIndex: 40 }}>
           <GlobalTopNav />
         </div>
 
@@ -313,7 +315,7 @@ export default function Landing() {
           justifyContent: 'space-between',
           padding: '60px 60px 40px',
           flex: 1,
-          zIndex: 1,
+          zIndex: 0,
         }}>
           {/* 왼쪽 텍스트 영역 */}
           <div style={{ flex: 1, maxWidth: '520px' }}>
@@ -447,7 +449,7 @@ export default function Landing() {
           gap: '80px',
           padding: '24px 60px',
           borderTop: '1px solid rgba(255,255,255,0.1)',
-          zIndex: 1,
+          zIndex: 0,
         }}>
           {[
             { value: stats.userCount.toLocaleString(), label: '가입 개발자' },

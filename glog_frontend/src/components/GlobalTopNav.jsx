@@ -3,7 +3,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/hooks/useAuth';
 import DmPanel from '../dm/DmPanel';
 import { useDmSocket } from '../dm/useDmSocket';
-import { useTrophyModal } from '../feed/trophy/TrophyModalContext';
+import GuestModal from '../feed/components/GuestModal';
 import './GlobalTopNav.css';
 
 const BACKEND_URL = 'http://localhost:4000';
@@ -15,6 +15,7 @@ export default function GlobalTopNav() {
   const { pathname } = useLocation();
   const isLoggedIn = Boolean(user);
   const [dmOpen, setDmOpen] = useState(false);
+  const [guestGlobeGateOpen, setGuestGlobeGateOpen] = useState(false);
   // 패널이 닫혀있을 때 새 DM 수신 여부 → DM 버튼 빨간 점 표시
   const [hasNewDm, setHasNewDm] = useState(false);
 
@@ -62,20 +63,27 @@ export default function GlobalTopNav() {
   };
 
   return (
-    <header className="gtn-bar">
+    <>
+      <header className="gtn-bar">
       <div className="gtn-brand">
         <NavLink to={homeTo} className="gtn-logo-link">
           GLog 🌍
         </NavLink>
       </div>
       <nav className="gtn-nav" aria-label="주 메뉴">
-        <NavLink
-          to={isLoggedIn ? '/globe' : '/'}
-          state={isLoggedIn ? { openMyProfile: true } : undefined}
-          className="gtn-link"
-        >
-          프로필
-        </NavLink>
+        {isLoggedIn ? (
+          <NavLink
+            to="/globe"
+            state={{ openMyProfile: true }}
+            className={({ isActive }) => `gtn-link${isActive && pathname === '/globe' ? ' gtn-active' : ''}`}
+          >
+            프로필
+          </NavLink>
+        ) : (
+          <button type="button" className="gtn-link" onClick={() => setGuestGlobeGateOpen(true)}>
+            프로필
+          </button>
+        )}
         <NavLink
           to="/feed"
           state={{ feedRouteEnter: true }}
@@ -85,12 +93,24 @@ export default function GlobalTopNav() {
         >
           피드
         </NavLink>
-        <NavLink to="/globe" state={{ openTrophy: true }} className="gtn-link">
-          트로피
-        </NavLink>
-        <NavLink to="/globe" state={{ openShop: true }} className="gtn-link">
-          상점
-        </NavLink>
+        {isLoggedIn ? (
+          <NavLink to="/globe" state={{ openTrophy: true }} className="gtn-link">
+            트로피
+          </NavLink>
+        ) : (
+          <button type="button" className="gtn-link" onClick={() => setGuestGlobeGateOpen(true)}>
+            트로피
+          </button>
+        )}
+        {isLoggedIn ? (
+          <NavLink to="/globe" state={{ openShop: true }} className="gtn-link">
+            상점
+          </NavLink>
+        ) : (
+          <button type="button" className="gtn-link" onClick={() => setGuestGlobeGateOpen(true)}>
+            상점
+          </button>
+        )}
         {isLoggedIn ? (
           <button type="button" className="gtn-link" onClick={handleLogout}>
             로그아웃
@@ -115,5 +135,7 @@ export default function GlobalTopNav() {
         />
       )}
     </header>
+    <GuestModal open={guestGlobeGateOpen} onClose={() => setGuestGlobeGateOpen(false)} />
+    </>
   );
 }

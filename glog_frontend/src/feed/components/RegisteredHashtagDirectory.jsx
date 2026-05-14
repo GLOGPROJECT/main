@@ -1,20 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { useAuth } from '../../auth/hooks/useAuth';
 import api from '../../api/axios';
 import { getTagPillColors } from '../utils/tagPillColors';
-import { MAX_TAG_SUBS, readSubscribedTagSlugs, TAG_SUBS_LS_KEY } from '../utils/tagSubscribeStorage';
+import { MAX_TAG_SUBS, readSubscribedTagSlugs, writeSubscribedTagSlugs } from '../utils/tagSubscribeStorage';
 
 const POPULAR_DIR_LIMIT = 200;
-
-function writeSubscribedSlugs(list) {
-  try {
-    localStorage.setItem(TAG_SUBS_LS_KEY, JSON.stringify(list.slice(0, MAX_TAG_SUBS)));
-    window.dispatchEvent(new CustomEvent('glog:tag-subs-changed'));
-  } catch {
-    /* ignore */
-  }
-}
 
 function formatCompactPostCount(n) {
   const x = Math.max(0, Math.floor(Number(n) || 0));
@@ -25,8 +17,10 @@ function formatCompactPostCount(n) {
 
 /** 게시글에 등록된 해시태그 카드 목록 (검색 없음) */
 export default function RegisteredHashtagDirectory() {
+  const { user } = useAuth();
+  const uid = user?.user_id;
   const [toast, setToast] = useState(null);
-  const [subs, setSubs] = useState(() => readSubscribedTagSlugs());
+  const [subs, setSubs] = useState(() => readSubscribedTagSlugs(uid));
 
   const { data: registeredTags = [], isLoading: registeredTagsLoading } = useQuery({
     queryKey: ['hashtags', 'registered', POPULAR_DIR_LIMIT],
@@ -37,8 +31,15 @@ export default function RegisteredHashtagDirectory() {
   });
 
   useEffect(() => {
-    setSubs(readSubscribedTagSlugs());
-  }, []);
+    setSubs(readSubscribedTagSlugs(uid));
+    const sync = () => setSubs(readSubscribedTagSlugs(uid));
+    window.addEventListener('glog:tag-subs-changed', sync);
+    window.addEventListener('storage', sync);
+    return () => {
+      window.removeEventListener('glog:tag-subs-changed', sync);
+      window.removeEventListener('storage', sync);
+    };
+  }, [uid]);
 
   useEffect(() => {
     if (!toast) return;
@@ -50,13 +51,17 @@ export default function RegisteredHashtagDirectory() {
 
   const toggleSubscribeTag = useCallback(
     (tagName) => {
+      if (!uid) {
+        showToast('로그인 후 태그를 구독할 수 있어요');
+        return;
+      }
       const key = String(tagName || '').trim();
       if (!key) return;
       const subscribed = subs.some((s) => s.toLowerCase() === key.toLowerCase());
       if (subscribed) {
         const next = subs.filter((s) => s.toLowerCase() !== key.toLowerCase());
         setSubs(next);
-        writeSubscribedSlugs(next);
+        writeSubscribedTagSlugs(next, uid);
         return;
       }
       if (subs.length >= MAX_TAG_SUBS) {
@@ -65,9 +70,9 @@ export default function RegisteredHashtagDirectory() {
       }
       const next = [...subs, key];
       setSubs(next);
-      writeSubscribedSlugs(next);
+      writeSubscribedTagSlugs(next, uid);
     },
-    [subs, showToast]
+    [subs, showToast, uid],
   );
 
   const copyTagUrl = useCallback(
@@ -80,7 +85,7 @@ export default function RegisteredHashtagDirectory() {
         showToast('클립보드 복사에 실패했어요');
       }
     },
-    [showToast]
+    [showToast],
   );
 
   return (

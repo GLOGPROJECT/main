@@ -96,8 +96,8 @@ const GRADE_IMG = {
   bronze: '/bronzetrophy.svg',
 };
 
-/** 내 프로젝트(트로피) 목록 */
-export function FeedUserProjectsPanel({ userId }) {
+/** 내 프로젝트(트로피) 목록 — onProjectActivate 있으면 클릭 시 콜백만(지구본 피크 모달 등), 없으면 /globe 트로피로 이동 */
+export function FeedUserProjectsPanel({ userId, onProjectActivate }) {
   const navigate = useNavigate();
   const [items, setItems] = useState([]);
   const [load, setLoad] = useState('loading');
@@ -144,7 +144,11 @@ export function FeedUserProjectsPanel({ userId }) {
         const pid = p.project_id != null ? Number(p.project_id) : NaN;
         const goTrophyProject = () => {
           if (!Number.isFinite(pid) || pid <= 0) return;
-          navigate('/globe', { state: { openTrophy: true, openProjectId: pid } });
+          if (typeof onProjectActivate === 'function') {
+            onProjectActivate(pid);
+          } else {
+            navigate('/globe', { state: { openTrophy: true, openProjectId: pid } });
+          }
         };
         return (
           <div
@@ -183,8 +187,8 @@ export function FeedUserProjectsPanel({ userId }) {
   );
 }
 
-/** 팔로워 또는 팔로우 중 목록 */
-export function FeedUserFollowPanel({ userId, mode }) {
+/** 팔로워 또는 팔로우 중 목록 — onUserActivate 있으면 행 클릭 시 콜백(지구본 포커스 등), 없으면 피드 유저 링크 */
+export function FeedUserFollowPanel({ userId, mode, onUserActivate }) {
   const [users, setUsers] = useState([]);
   const [load, setLoad] = useState('loading');
   const [err, setErr] = useState(null);
@@ -227,18 +231,12 @@ export function FeedUserFollowPanel({ userId, mode }) {
   return (
     <div className="feed-card feed-card-surface" style={{ padding: '0.5rem 0' }}>
       <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-        {users.map((u) => (
-          <li
-            key={u.user_id}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 12,
-              padding: '0.55rem 1rem',
-              borderBottom: '1px solid var(--feed-border)',
-            }}
-          >
-            <Link to={`/feed/user/${u.user_id}`} state={{ nickname: u.nickname }} style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', color: 'inherit', minWidth: 0, flex: 1 }}>
+        {users.map((u) => {
+          const rowClick = () => {
+            if (typeof onUserActivate === 'function') onUserActivate(u);
+          };
+          const inner = (
+            <>
               {u.avatar_url ? (
                 <img src={u.avatar_url} alt="" width={40} height={40} style={{ borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
               ) : (
@@ -247,12 +245,51 @@ export function FeedUserFollowPanel({ userId, mode }) {
               <span className="feed-post-author" style={{ fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {u.nickname || `유저 #${u.user_id}`}
               </span>
-            </Link>
-            <span className="feed-post-meta" style={{ fontSize: '0.72rem', flexShrink: 0 }}>
-              {formatYmd(u.since)}
-            </span>
-          </li>
-        ))}
+            </>
+          );
+          return (
+            <li
+              key={u.user_id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                padding: '0.55rem 1rem',
+                borderBottom: '1px solid var(--feed-border)',
+              }}
+            >
+              {typeof onUserActivate === 'function' ? (
+                <button
+                  type="button"
+                  onClick={rowClick}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    textDecoration: 'none',
+                    color: 'inherit',
+                    minWidth: 0,
+                    flex: 1,
+                    background: 'none',
+                    border: 'none',
+                    padding: 0,
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                  }}
+                >
+                  {inner}
+                </button>
+              ) : (
+                <Link to={`/feed/user/${u.user_id}`} state={{ nickname: u.nickname }} style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', color: 'inherit', minWidth: 0, flex: 1 }}>
+                  {inner}
+                </Link>
+              )}
+              <span className="feed-post-meta" style={{ fontSize: '0.72rem', flexShrink: 0 }}>
+                {formatYmd(u.since)}
+              </span>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

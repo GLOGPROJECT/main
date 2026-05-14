@@ -264,13 +264,13 @@ export default function ComposeModal({ open, onClose, editPost = null, initialAc
 
   const registeredRows = useMemo(() => {
     const out = [];
-    for (const slug of readSubscribedTagSlugs()) {
+    for (const slug of readSubscribedTagSlugs(user?.user_id)) {
       if (out.length >= 5) break;
       if (tagQueryNorm && !String(slug).toLowerCase().includes(tagQueryNorm)) continue;
       out.push(String(slug).trim());
     }
     return out;
-  }, [tagQueryNorm, tagSubsRev]);
+  }, [tagQueryNorm, tagSubsRev, user?.user_id]);
 
   const revokeObjectUrls = useCallback((list) => {
     list.forEach((i) => {
@@ -409,9 +409,9 @@ export default function ComposeModal({ open, onClose, editPost = null, initialAc
   );
 
   const removeRegisteredTag = useCallback((slug) => {
-    removeSubscribedTagSlug(slug);
+    removeSubscribedTagSlug(slug, user?.user_id);
     setTags((prev) => prev.filter((x) => x.toLowerCase() !== String(slug).toLowerCase()));
-  }, []);
+  }, [user?.user_id]);
 
   const loadLinkPreview = useCallback(async () => {
     setLinkFetchError('');
