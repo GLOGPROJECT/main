@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import api, { API_ORIGIN } from '../../api/axios';
 import GlobalTopNav from '../../components/GlobalTopNav';
+import * as THREE from 'three';
 
 // 전역 CSS:
 // - earth-spin: 지구본 무한 회전 (20초 1바퀴)
@@ -34,7 +35,159 @@ const globalStyles = `
   .cta-btn:hover {
     background: #dbeafe;
   }
+  @keyframes cardFloat1 {
+    0%, 100% { transform: perspective(600px) rotateY(-6deg) scale(1.04) translateY(0px); }
+    50%       { transform: perspective(600px) rotateY(-6deg) scale(1.04) translateY(-8px); }
+  }
+  @keyframes cardFloat2 {
+    0%, 100% { transform: perspective(600px) rotateY(6deg) scale(1.04) translateY(0px); }
+    50%       { transform: perspective(600px) rotateY(6deg) scale(1.04) translateY(-8px); }
+  }
 `;
+
+// ── 홀로그램 지구 컴포넌트 ──
+// Three.js로 격자선 + 대륙 외곽선 + 글로우를 캔버스에 직접 렌더링
+// Landing 페이지 전용 — 로그인 전 홈화면에서만 사용
+function HologramEarth({ size = 480 }) {
+  const mountRef = useRef(null);
+
+  useEffect(() => {
+    const el = mountRef.current;
+    if (!el) return;
+
+    // 씬 / 카메라 / 렌더러
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+    camera.position.set(0, 0, 3);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(size, size);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setClearColor(0x000000, 0); // 배경 투명
+    el.appendChild(renderer.domElement);
+
+    // 위도/경도 → 구체 표면 3D 좌표
+    function latLonToVec3(lat, lon, r = 1.002) {
+      const phi = (90 - lat) * (Math.PI / 180);
+      const theta = (lon + 180) * (Math.PI / 180);
+      return new THREE.Vector3(
+        -r * Math.sin(phi) * Math.cos(theta),
+         r * Math.cos(phi),
+         r * Math.sin(phi) * Math.sin(theta)
+      );
+    }
+
+    // 지구 본체
+    const earthMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 64, 64),
+      new THREE.MeshPhongMaterial({ color: 0x001525, emissive: 0x000d18, transparent: true, opacity: 0.95 })
+    );
+    scene.add(earthMesh);
+
+    // 격자선 그룹 (지구와 함께 회전)
+    const gridGroup = new THREE.Group();
+    scene.add(gridGroup);
+    const gridMat = new THREE.LineBasicMaterial({ color: 0x0077cc, transparent: true, opacity: 0.2 });
+
+    for (let i = 0; i <= 18; i++) {
+      const lat = (i / 18) * Math.PI - Math.PI / 2;
+      const r = Math.cos(lat), y = Math.sin(lat);
+      const pts = [];
+      for (let j = 0; j <= 64; j++) {
+        const lng = (j / 64) * Math.PI * 2;
+        pts.push(new THREE.Vector3(r * Math.cos(lng), y, r * Math.sin(lng)));
+      }
+      gridGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), gridMat));
+    }
+    for (let i = 0; i < 24; i++) {
+      const lng = (i / 24) * Math.PI * 2;
+      const pts = [];
+      for (let j = 0; j <= 64; j++) {
+        const lat2 = (j / 64) * Math.PI - Math.PI / 2;
+        pts.push(new THREE.Vector3(Math.cos(lat2) * Math.cos(lng), Math.sin(lat2), Math.cos(lat2) * Math.sin(lng)));
+      }
+      gridGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), gridMat));
+    }
+
+    // 외곽 글로우 레이어
+    [{ r: 1.08, o: 0.07 }, { r: 1.2, o: 0.03 }, { r: 1.35, o: 0.015 }].forEach(({ r, o }) => {
+      scene.add(new THREE.Mesh(
+        new THREE.SphereGeometry(r, 64, 64),
+        new THREE.MeshBasicMaterial({ color: 0x0055ff, transparent: true, opacity: o, side: THREE.BackSide })
+      ));
+    });
+
+    // 대륙 외곽선 그룹 (GeoJSON 로드)
+    const continentGroup = new THREE.Group();
+    scene.add(continentGroup);
+    const continentMat = new THREE.LineBasicMaterial({ color: 0x00ccff, transparent: true, opacity: 0.85 });
+
+    fetch('https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson')
+      .then(res => res.json())
+      .then(geojson => {
+        geojson.features.forEach(feature => {
+          const geom = feature.geometry;
+          const polys = geom.type === 'Polygon' ? [geom.coordinates]
+                      : geom.type === 'MultiPolygon' ? geom.coordinates : [];
+          polys.forEach(poly => {
+            poly.forEach(ring => {
+              let pts = [];
+              for (let i = 0; i < ring.length; i++) {
+                const [lon, lat] = ring[i];
+                // 날짜변경선 근처(경도 차이 90도 이상)는 선 끊기
+                if (i > 0 && Math.abs(lon - ring[i - 1][0]) > 90) {
+                  if (pts.length > 1) continentGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), continentMat));
+                  pts = [];
+                }
+                pts.push(latLonToVec3(lat, lon));
+              }
+              if (pts.length > 1) continentGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), continentMat));
+            });
+          });
+        });
+      })
+      .catch(() => {});
+
+    // 표면 반짝이는 점들
+    const dotPositions = [];
+    for (let i = 0; i < 150; i++) {
+      const phi = Math.acos(2 * Math.random() - 1);
+      const theta = Math.random() * Math.PI * 2;
+      dotPositions.push(Math.sin(phi) * Math.cos(theta), Math.cos(phi), Math.sin(phi) * Math.sin(theta));
+    }
+    const dotGeo = new THREE.BufferGeometry();
+    dotGeo.setAttribute('position', new THREE.Float32BufferAttribute(dotPositions, 3));
+    const dots = new THREE.Points(dotGeo, new THREE.PointsMaterial({ color: 0x88ddff, size: 0.015, transparent: true, opacity: 0.8 }));
+    scene.add(dots);
+
+    // 조명
+    scene.add(new THREE.AmbientLight(0x112244, 2));
+    const pl1 = new THREE.PointLight(0x0088ff, 4, 10);
+    pl1.position.set(2, 2, 2);
+    scene.add(pl1);
+
+    // 자동 회전 애니메이션
+    let animId;
+    function animate() {
+      animId = requestAnimationFrame(animate);
+      earthMesh.rotation.y += 0.003;
+      gridGroup.rotation.y = earthMesh.rotation.y;
+      continentGroup.rotation.y = earthMesh.rotation.y;
+      dots.rotation.y = earthMesh.rotation.y;
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // 언마운트 시 정리
+    return () => {
+      cancelAnimationFrame(animId);
+      renderer.dispose();
+      if (el.contains(renderer.domElement)) el.removeChild(renderer.domElement);
+    };
+  }, [size]);
+
+  return <div ref={mountRef} style={{ width: size, height: size }} />;
+}
 
 export default function Landing() {
   // useAuth 훅에서 현재 로그인된 유저 정보와 로딩 상태를 가져옴
@@ -49,6 +202,7 @@ export default function Landing() {
     todayCommits: 0,
     topCommitters: [],
   });
+
 
   // 배경 별 150개를 랜덤 위치/크기/애니메이션으로 생성
   // useMemo로 한 번만 생성 (리렌더링마다 재계산 방지)
@@ -85,10 +239,17 @@ export default function Landing() {
   }, []);
 
   // 하단 통계 데이터를 백엔드 /api/stats에서 가져옴
-  // 실패해도 기본값(0)으로 유지해 화면이 깨지지 않도록 처리
   useEffect(() => {
     api.get('/stats')
       .then(({ data }) => setStats(data))
+      .catch(() => {});
+  }, []);
+
+  // 6시간마다 서버에서 랜덤 유저 2명 (커밋 0이면 0으로 표시)
+  const [featuredUsers, setFeaturedUsers] = useState([]);
+  useEffect(() => {
+    api.get('/stats/featured')
+      .then(({ data }) => setFeaturedUsers(data))
       .catch(() => {});
   }, []);
 
@@ -196,82 +357,82 @@ export default function Landing() {
             relative 기준으로 카드 2개를 절대 위치에 배치 */}
           <div style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', position: 'relative' }}>
 
-            {/* 지구본 - 기존 480px의 1.5배인 720px */}
-            <img
-              src="/earth.svg"
-              alt="earth"
-              className="earth-spin"
-              style={{ width: '720px' }}
-            />
+            {/* 홀로그램 지구 — Three.js 캔버스, 배경 투명 */}
+            <HologramEarth size={520} />
 
-            {/* 1위 커미터 카드
-                - 지구본 우측 중앙에 바짝 붙여 배치
-                - 금빛 형광 네온 글로우 효과 (box-shadow 다중 레이어)
-                - 흰색 반투명 배경 */}
-            {stats.topCommitters[0] && (
+            {/* 유저 카드 1 — 지구본 우측 상단 */}
+            {featuredUsers[0] && (
               <div style={{
                 position: 'absolute',
-                top: '20%',
+                top: '18%',
                 right: '30px',
-                background: 'rgba(255, 255, 255, 0.7)',
-                backdropFilter: 'blur(10px)',
-                borderRadius: '16px',
-                padding: '20px 24px',
-                minWidth: '200px',
-                color: '#0f1c36',
-                border: '1.5px solid rgba(251, 191, 36, 0.8)',
-                // 금빛 네온 글로우: 안쪽 → 바깥쪽으로 점점 퍼지는 3단계 그림자
-                boxShadow: `
-                  0 0 8px rgba(251, 191, 36, 0.9),
-                  0 0 20px rgba(251, 191, 36, 0.5),
-                  0 0 40px rgba(251, 191, 36, 0.25),
-                  0 8px 32px rgba(0,0,0,0.2)
-                `,
+                background: 'rgba(216, 219, 230, 0.7)',
+                backdropFilter: 'blur(16px)',
+                borderRadius: '12px',
+                padding: '10px 28px',
+                color: 'black',
+                border: '1px solid rgba(143, 170, 253, 0.5)',
+                boxShadow: '0 0 12px rgba(143,170,253,0.6), 0 0 32px rgba(143,170,253,0.25), 0 4px 20px rgba(0,0,0,0.3)',
+                transform: 'perspective(600px) rotateY(-6deg) scale(1.04)',
+                animation: 'cardFloat1 3.5s ease-in-out infinite',
               }}>
-                <div style={{ fontSize: '0.85rem', fontWeight: '700', color: '#d97706', marginBottom: '8px', letterSpacing: '0.05em' }}>
-                  🥇 오늘의 1위
+                <div style={{ fontSize: '0.78rem', color: 'rgba(80, 80, 100, 0.75)', marginBottom: '2px', letterSpacing: '0.04em' }}>
+                  오늘의 커밋 {featuredUsers[0].commitCount}
                 </div>
-                <div style={{ fontSize: '1.2rem', fontWeight: '800', marginBottom: '6px' }}>
-                  {stats.topCommitters[0].nickname}
+                <div style={{ fontSize: '1.5rem', fontWeight: '700', letterSpacing: '-0.01em', color: 'black', marginBottom: '4px', textShadow: '0 0 6px rgba(99,102,241,0.35)' }}>
+                  {featuredUsers[0].nickname}
                 </div>
-                <div style={{ fontSize: '1rem', color: '#374151', fontWeight: '600' }}>
-                  커밋 {stats.topCommitters[0].commitCount}회
-                </div>
+                {featuredUsers[0].techStacks?.length > 0 && (
+                  <div style={{ display: 'flex', gap: '5px' }}>
+                    {featuredUsers[0].techStacks.map((t, i) => (
+                      <span key={t} style={{
+                        fontSize: '0.68rem', fontWeight: '600',
+                        background: i === 0 ? 'rgba(99,102,241,0.15)' : 'rgba(16,185,129,0.15)',
+                        border: `1px solid ${i === 0 ? 'rgba(99,102,241,0.45)' : 'rgba(16,185,129,0.45)'}`,
+                        borderRadius: '5px', padding: '1px 7px',
+                        color: i === 0 ? '#4f46e5' : '#059669',
+                      }}>{t}</span>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
-            {/* 2위 커미터 카드
-                - 지구본 좌측 하단에 바짝 붙여 배치
-                - 은빛 형광 네온 글로우 효과 */}
-            {stats.topCommitters[1] && (
+            {/* 유저 카드 2 — 지구본 좌측 하단 */}
+            {featuredUsers[1] && (
               <div style={{
                 position: 'absolute',
-                bottom: '20%',
+                bottom: '18%',
                 left: '30px',
-                background: 'rgba(255, 255, 255, 0.7)',
-                backdropFilter: 'blur(10px)',
-                borderRadius: '16px',
-                padding: '20px 24px',
-                minWidth: '200px',
-                color: '#0f1c36',
-                border: '1.5px solid rgba(192, 192, 220, 0.9)',
-                // 은빛 네온 글로우
-                boxShadow: `
-                  0 0 8px rgba(200, 200, 255, 0.9),
-                  0 0 20px rgba(200, 200, 255, 0.5),
-                  0 0 40px rgba(200, 200, 255, 0.25),
-                  0 8px 32px rgba(0,0,0,0.2)
-                `,
+                background: 'rgba(216, 219, 230, 0.7)',
+                backdropFilter: 'blur(16px)',
+                borderRadius: '12px',
+                padding: '10px 28px',
+                color: 'black',
+                border: '1px solid rgba(143, 170, 253, 0.5)',
+                boxShadow: '0 0 12px rgba(143,170,253,0.6), 0 0 32px rgba(143,170,253,0.25), 0 4px 20px rgba(0,0,0,0.3)',
+                transform: 'perspective(600px) rotateY(6deg) scale(1.04)',
+                animation: 'cardFloat2 4s ease-in-out infinite',
               }}>
-                <div style={{ fontSize: '0.85rem', fontWeight: '700', color: '#6b7280', marginBottom: '8px', letterSpacing: '0.05em' }}>
-                  🥈 오늘의 2위
+                <div style={{ fontSize: '0.78rem', color: 'rgba(80, 80, 100, 0.75)', marginBottom: '2px', letterSpacing: '0.04em' }}>
+                  오늘의 커밋 {featuredUsers[1].commitCount}
                 </div>
-                <div style={{ fontSize: '1.2rem', fontWeight: '800', marginBottom: '6px' }}>
-                  {stats.topCommitters[1].nickname}
+                <div style={{ fontSize: '1.5rem', fontWeight: '700', letterSpacing: '-0.01em', color: 'black', marginBottom: '4px', textShadow: '0 0 6px rgba(99,102,241,0.35)' }}>
+                  {featuredUsers[1].nickname}
                 </div>
-                <div style={{ fontSize: '1rem', color: '#374151', fontWeight: '600' }}>
-                  커밋 {stats.topCommitters[1].commitCount}회
-                </div>
+                {featuredUsers[1].techStacks?.length > 0 && (
+                  <div style={{ display: 'flex', gap: '5px' }}>
+                    {featuredUsers[1].techStacks.map((t, i) => (
+                      <span key={t} style={{
+                        fontSize: '0.68rem', fontWeight: '600',
+                        background: i === 0 ? 'rgba(99,102,241,0.15)' : 'rgba(16,185,129,0.15)',
+                        border: `1px solid ${i === 0 ? 'rgba(99,102,241,0.45)' : 'rgba(16,185,129,0.45)'}`,
+                        borderRadius: '5px', padding: '1px 7px',
+                        color: i === 0 ? '#4f46e5' : '#059669',
+                      }}>{t}</span>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
