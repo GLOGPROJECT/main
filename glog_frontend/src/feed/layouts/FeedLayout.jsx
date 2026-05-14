@@ -160,6 +160,7 @@ function FeedLayoutInner() {
 
   const [dmOpen, setDmOpen] = useState(false);
   const [dmPartnerId, setDmPartnerId] = useState(null);
+  const [adModalOpen, setAdModalOpen] = useState(false);
   const dmReceiveHandlerRef = useRef(null);
   const dmSentHandlerRef = useRef(null);
   const dmReadAckHandlerRef = useRef(null);
@@ -452,7 +453,17 @@ function FeedLayoutInner() {
               </button>
             ) : null}
           </div>
-          <div className="feed-ad">광고 영역 AD</div>
+          <div className="feed-ad" onClick={() => setAdModalOpen(true)} style={{ cursor: 'pointer' }}>
+            <img src="/ad1.svg" alt="광고" style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} />
+          </div>
+          {adModalOpen && (
+            <div onClick={() => setAdModalOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div style={{ position: 'relative' }} onClick={(e) => e.stopPropagation()}>
+                <button onClick={() => setAdModalOpen(false)} style={{ position: 'absolute', top: -16, right: -16, width: 32, height: 32, borderRadius: '50%', border: 'none', background: 'white', cursor: 'pointer', fontSize: '1rem', fontWeight: 700, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+                <img src="/ad1.svg" alt="광고" style={{ maxWidth: '90vw', maxHeight: '90vh', objectFit: 'contain', display: 'block' }} />
+              </div>
+            </div>
+          )}
           <WeeklyActivityCard isLoggedIn={isLoggedIn} />
           <button type="button" className="feed-btn-primary" style={{ width: '100%' }} onClick={openComposeNew}>
             + 새 게시글
@@ -517,6 +528,9 @@ function FeedLayoutInner() {
             </Link>
           </div>
           <PopularHashtagsSidebar />
+          <a href="https://www.youtube.com/@moonnightoday" target="_blank" rel="noopener noreferrer">
+            <div className="feed-ad"><img src="/ad2.svg" alt="광고" style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} /></div>
+          </a>
         </aside>
       </div>
 
